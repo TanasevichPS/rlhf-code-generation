@@ -1,0 +1,85 @@
+# Временные файлы и кеши
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Логи и данные
+*.log
+*.sql
+*.sqlite
+*.db
+
+# Модели и датасеты (очень большие файлы)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.h5
+*.joblib
+datasets/
+data/
+outputs/
+code_rlhf_outputs/
+evaluation_results_server/
+evaluation_results/
+datasets_for_eval/
+tests/
+
+# Кеши тестирования и покрытия
+.pytest_cache/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+htmlcov/
+
+# Документация
+docs/_build/
+_build/
+
+# Специфичные для проекта
+.qodo/
+start.txt
+*.zip
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# Операционные системы
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Резервные копии
+*.bak
+*.backup
+
+# Локальные конфигурации
+local.yml
+local.yaml
+local.json
+config/local.*
