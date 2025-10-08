@@ -7,7 +7,7 @@ class CodeRLHFConfig:
     """Configuration for improved code generation RLHF."""
     
     # Model settings
-    model_name: str = "jinaai/jina-embeddings-v2-base-code"
+    model_name: str = "microsoft/CodeGPT-small-py"
     reward_model_name: str = "microsoft/codebert-base"
     
     # Dataset settings

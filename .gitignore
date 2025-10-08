@@ -60,7 +60,9 @@ _build/
 # Специфичные для проекта
 .qodo/
 start.txt
+all_code.txt
 *.zip
+pyproject.toml
 
 # Jupyter notebooks
 .ipynb_checkpoints
