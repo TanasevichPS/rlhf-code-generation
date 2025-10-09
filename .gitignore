@@ -34,7 +34,6 @@ venv.bak/
 *.h5
 *.joblib
 datasets/
-data/
 outputs/
 code_rlhf_outputs/
 evaluation_results_server/
