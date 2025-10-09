@@ -1,4 +1,3 @@
-# Добавьте в существующий файл эту улучшенную версию
 import logging
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from trl import AutoModelForCausalLMWithValueHead
@@ -27,7 +26,7 @@ class ModelLoader:
         # Reference model (can be None for PPOTrainer)
         ref_model = None
         
-        logger.info("✓ Models loaded successfully")
+        logger.info("Models loaded successfully!!")
         return tokenizer, policy_model, ref_model
     
     def _load_tokenizer(self):
@@ -41,7 +40,7 @@ class ModelLoader:
             logger.warning(f"First attempt failed: {e}, trying fallback...")
             try:
                 tokenizer = AutoTokenizer.from_pretrained("gpt2")
-                logger.info("✓ Using GPT-2 tokenizer as fallback")
+                logger.info("Using GPT-2 tokenizer as fallback")
             except Exception as e2:
                 logger.error(f"Failed to load tokenizer: {e2}")
                 raise

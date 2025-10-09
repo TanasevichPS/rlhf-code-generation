@@ -15,7 +15,7 @@ class CodeRLHFConfig:
     human_eval_path: str = "./evaluation_results_server"
     
     # Training settings
-    learning_rate: float = 5e-6
+    learning_rate: float = 1e-6
     batch_size: int = 2
     ppo_epochs: int = 10
     reward_training_epochs: int = 5

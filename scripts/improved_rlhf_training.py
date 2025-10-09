@@ -16,10 +16,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     # Try to import with datasets
     from src.data.dataset_utils import CodeDatasetLoader
-    print("✓ Using datasets version")
+    print("Using datasets version")
 except ImportError as e:
-    print(f"✗ datasets import failed: {e}")
-    print("✓ Using standalone dataset implementation")
+    print(f"datasets import failed: {e}")
+    print("Using standalone dataset implementation")
     # Fallback to our standalone implementation
     from src.data.dataset_utils import CodeDatasetLoader
 
@@ -54,7 +54,7 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-# main.py
+
 def main() -> None:
     """Main training function for code generation."""
     # Configuration for code generation
