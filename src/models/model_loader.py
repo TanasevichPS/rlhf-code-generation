@@ -1,6 +1,6 @@
 import logging
+import ast
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from trl import AutoModelForCausalLMWithValueHead
 import torch
 from typing import List
 
@@ -55,13 +55,26 @@ class ModelLoader:
     def _load_policy_model(self):
         """Load policy model with value head."""
         try:
-            model = AutoModelForCausalLMWithValueHead.from_pretrained(
-                self.config.model_name,
-                torch_dtype=torch.float32,
-                trust_remote_code=True
-            )
-            model = model.to(self.device)
-            return model
+            # Try to use TRL's AutoModelForCausalLMWithValueHead if available.
+            try:
+                from trl import AutoModelForCausalLMWithValueHead
+                model = AutoModelForCausalLMWithValueHead.from_pretrained(
+                    self.config.model_name,
+                    torch_dtype=torch.float32,
+                    trust_remote_code=True
+                )
+                model = model.to(self.device)
+                return model
+            except Exception:
+                # If TRL is not available or incompatible, fall back to a standard causal LM.
+                logger.warning("TRL AutoModelForCausalLMWithValueHead not available or failed to import; falling back to AutoModelForCausalLM")
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.config.model_name,
+                    torch_dtype=torch.float32,
+                    trust_remote_code=True
+                )
+                model = model.to(self.device)
+                return model
         except Exception as e:
             logger.error(f"Failed to load policy model: {e}")
             raise

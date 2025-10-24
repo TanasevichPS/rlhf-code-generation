@@ -1,0 +1,29 @@
+# Minimal reproducible requirements for RLHF pipeline
+# Note: Select the appropriate torch wheel (CPU vs CUDA) separately if needed.
+numpy<2
+torch>=2.1.0
+transformers>=4.30.2
+trl>=0.6.0
+accelerate>=0.21.0
+datasets>=2.13.0
+sentencepiece>=0.1.99
+tokenizers>=0.13.3
+bert-score>=0.3.13
+rouge-score>=0.1.2
+nltk>=3.8.1
+pandas>=2.2.0
+pyyaml>=6.0
+tqdm>=4.65.0
+scipy>=1.10.1
+scikit-learn>=1.2.2
+# CodeBLEU may require installing from the repository or a compatible pip package
+codebleu
+# If you want the microsoft CodeBLEU implementation (fallback), uncomment the line below
+# git+https://github.com/microsoft/CodeBLEU.git
+
+# Optional: for experiment tracking
+wandb>=0.15.0
+
+# Notes:
+# - On Windows it's often easier to install torch with the platform-specific wheel from https://pytorch.org/get-started/locally/
+# - If you have binary incompatibilities (e.g. NumPy ABI), prefer installing `numpy<2` as above.
