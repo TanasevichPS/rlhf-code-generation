@@ -35,10 +35,36 @@ class ModelComparator:
         self.trained_tokenizer, self.trained_model, _ = trained_loader.load_models()
         
         # Load reward model
+        # Initialize reward model from config name by default
         self.reward_model = ImprovedCodeRewardModel(self.config.reward_model_name)
-        if os.path.exists(reward_model_path):
-            self.reward_model.load_state_dict(torch.load(reward_model_path, map_location=self.config.device))
-        
+
+        # If a reward model artifact exists, try to load it. Support directory (HF) or .pt state_dict
+        try:
+            if os.path.exists(reward_model_path):
+                if os.path.isdir(reward_model_path):
+                    try:
+                        self.reward_model = ImprovedCodeRewardModel(reward_model_path)
+                        self.logger.info(f"Initialized reward model from directory: {reward_model_path}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to init ImprovedCodeRewardModel from dir {reward_model_path}: {e}; using default model")
+                else:
+                    try:
+                        state = torch.load(reward_model_path, map_location=self.config.device)
+                        try:
+                            self.reward_model.load_state_dict(state, strict=False)
+                            self.logger.info(f"Loaded reward model state_dict from: {reward_model_path}")
+                        except RuntimeError as e:
+                            self.logger.warning(f"reward model state_dict load failed (shape/key mismatch): {e}; continuing with default model")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load reward model file {reward_model_path}: {e}; continuing with default model")
+        except Exception as e:
+            self.logger.warning(f"Unexpected error while preparing reward model: {e}; continuing with default model")
+
+        try:
+            self.reward_model.to(self.config.device)
+        except Exception:
+            pass
+
         self.reward_model.eval()
     
     def _setup_logging(self):

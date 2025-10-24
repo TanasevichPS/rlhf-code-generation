@@ -8,15 +8,17 @@ class CodeRLHFConfig:
     
     # Model settings
     model_name: str = "microsoft/CodeGPT-small-py"
-    reward_model_name: str = "microsoft/codebert-base"
+    # Use a smaller distilled model by default to fit low-memory GPUs during reward training
+    reward_model_name: str = "distilbert-base-uncased"
     
     # Dataset settings
     dataset_path: str = "./datasets_for_eval"
     human_eval_path: str = "./evaluation_results_server"
     
     # Training settings
-    learning_rate: float = 1e-6
-    batch_size: int = 2
+    learning_rate: float = 2e-5
+    # Keep default batch sizes small to accommodate 4GB GPUs
+    batch_size: int = 1
     ppo_epochs: int = 10
     reward_training_epochs: int = 5
     mini_batch_size: int = 1
@@ -40,6 +42,8 @@ class CodeRLHFConfig:
     output_dir: str = "./outputs"
     save_steps: int = 500
     logging_steps: int = 100
+    # Early stopping target mean reward for RLHF training (0-1 scale)
+    early_stop_reward: float = 0.8
     
     # Reproducibility
     seed: int = 42

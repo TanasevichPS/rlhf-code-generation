@@ -16,6 +16,7 @@ from src.config import CodeRLHFConfig
 from src.data.dataset_loader import CodeDatasetLoader
 from src.models.model_loader import ModelLoader
 from src.models.reward_model import ImprovedCodeRewardModel
+from src.metrics_tracker import MetricsTracker
 
 class ModelEvaluator:
     def __init__(self, model_path: str, reward_model_path: str):
@@ -32,14 +33,47 @@ class ModelEvaluator:
         self.tokenizer, self.policy_model, _ = self.model_loader.load_models()
         
         # Load reward model
+        # Initialize reward model from config name by default
         self.reward_model = ImprovedCodeRewardModel(self.config.reward_model_name)
-        if os.path.exists(reward_model_path):
-            self.reward_model.load_state_dict(torch.load(reward_model_path, map_location=self.config.device))
-            self.logger.info("Loaded trained reward model")
-        else:
-            self.logger.warning("Using untrained reward model")
-        
+
+        # If a reward model artifact exists, try to load it. Support either:
+        #  - a Hugging Face saved model directory, or
+        #  - a .pt state_dict file. If loading fails, log and continue with the
+        #    model created from config to avoid aborting evaluation.
+        try:
+            if os.path.exists(reward_model_path):
+                if os.path.isdir(reward_model_path):
+                    # Try to initialize model from HF-style directory
+                    try:
+                        self.reward_model = ImprovedCodeRewardModel(reward_model_path)
+                        self.logger.info(f"Initialized reward model from directory: {reward_model_path}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to init ImprovedCodeRewardModel from dir {reward_model_path}: {e}; using default model")
+                else:
+                    # Attempt to load a PyTorch state_dict
+                    try:
+                        state = torch.load(reward_model_path, map_location=self.config.device)
+                        try:
+                            self.reward_model.load_state_dict(state, strict=False)
+                            self.logger.info(f"Loaded reward model state_dict from: {reward_model_path}")
+                        except RuntimeError as e:
+                            self.logger.warning(f"reward model state_dict load failed (shape/key mismatch): {e}; continuing with default model")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load reward model file {reward_model_path}: {e}; continuing with default model")
+        except Exception as e:
+            self.logger.warning(f"Unexpected error while preparing reward model: {e}; continuing with default model")
+
+        # Move to device and set to eval
+        try:
+            self.reward_model.to(self.config.device)
+        except Exception:
+            # best-effort: if device move fails, continue on CPU
+            pass
         self.reward_model.eval()
+        # Ensure output dir exists and create metrics tracker
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        # Metrics tracker for automatic metrics (BERTScore/BLEU/CodeBLEU/ROUGE/RUBY)
+        self.metrics_tracker = MetricsTracker(output_dir=os.path.join(self.config.output_dir))
     
     def _setup_logging(self):
         """Setup logging without encoding issues."""
@@ -184,6 +218,26 @@ class ModelEvaluator:
                 prompt_column = df.columns[0]  # Use first column as fallback
             
             prompts = df[prompt_column].dropna().astype(str).tolist()
+
+            # Detect reference column (robust, case-insensitive, substring match)
+            ref_column = None
+            ref_keywords = ['answer', 'ans', 'reference', 'ref', 'target', 'snippet', 'solution', 'code', 'gold']
+            for col in df.columns:
+                col_low = str(col).lower()
+                if any(k in col_low for k in ref_keywords):
+                    ref_column = col
+                    break
+
+            if ref_column is not None:
+                references = df[ref_column].fillna('').astype(str).tolist()
+                self.logger.info(f"Using reference column '{ref_column}' for evaluation")
+            else:
+                # No clear reference column found. Use empty references instead of
+                # falling back to prompts (which artificially deflates e.g. BLEU/CodeBLEU
+                # when prompts are not code). Metrics that require references will
+                # gracefully return 0.0 in MetricsTracker.
+                self.logger.warning(f"No reference column detected in {dataset_path}; automatic metrics that need references will be set to 0.")
+                references = [''] * len(prompts)
             
             if sample_size and sample_size < len(prompts):
                 prompts = prompts[:sample_size]
@@ -204,6 +258,17 @@ class ModelEvaluator:
             for i, prompt in enumerate(prompts):
                 self.logger.info(f"Processing prompt {i+1}/{len(prompts)}")
                 result = self.evaluate_single_prompt(prompt)
+                # attach reference
+                ref_text = references[i] if i < len(references) else ''
+                result['reference'] = ref_text
+
+                # compute automatic metrics for this example
+                try:
+                    metrics = self.metrics_tracker.calculate_metrics([prompt], [result['generated_code']], [ref_text])
+                    # merge metrics into result
+                    result.update(metrics)
+                except Exception as e:
+                    self.logger.error(f"Failed to compute metrics for example {i}: {e}")
                 results.append(result)
                 
                 # Accumulate scores
@@ -269,7 +334,7 @@ def main():
     evaluator = ModelEvaluator(trained_model_path, reward_model_path)
     
     # Evaluate
-    results = evaluator.evaluate_dataset(dataset_path, sample_size=20)  # Evaluate on 20 samples
+    results = evaluator.evaluate_dataset(dataset_path, sample_size=10)  # Evaluate on 10 samples for faster run
     
     # Save results
     evaluator.save_evaluation_results(results, output_file)

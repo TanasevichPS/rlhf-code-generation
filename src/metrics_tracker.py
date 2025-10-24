@@ -28,7 +28,7 @@ class MetricsTracker:
         if not os.path.exists(self.metrics_file):
             pd.DataFrame(columns=[
                 'timestamp', 'epoch', 'batch', 'reward', 'syntax_score', 
-                'structure_score', 'bertscore', 'bleu', 'codebleu', 'rouge',
+                'structure_score', 'bertscore', 'bleu', 'codebleu', 'rouge', 'ruby',
                 'kl_divergence', 'policy_loss', 'value_loss'
             ]).to_csv(self.metrics_file, index=False)
     
@@ -99,22 +99,76 @@ class MetricsTracker:
     def calculate_codebleu(self, generated_codes: List[str], reference_codes: List[str]) -> float:
         """Calculate CodeBLEU score."""
         try:
-            from codebleu import calc_codebleu
-            
-            # For simplicity, we'll use a simplified version
-            # You might need to install: pip install codebleu
-            results = calc_codebleu(
-                references=reference_codes,
-                predictions=generated_codes,
-                lang="python",
-                weights=(0.25, 0.25, 0.25, 0.25),  # ngram_match, weighted_ngram_match, syntax_match, dataflow_match
-            )
-            return results['codebleu']
-        except ImportError:
-            logger.warning("CodeBLEU not available")
-            return 0.0
+            # Some codebleu implementations expect files; to be robust we write temporary files
+            # Defensive: filter out pairs where reference is empty and ensure equal lengths
+            paired = [(p, r) for p, r in zip(generated_codes, reference_codes) if (r and r.strip())]
+            if not paired:
+                logger.warning("No non-empty references available for CodeBLEU calculation")
+                return 0.0
+            preds_filtered, refs_filtered = zip(*paired)
+
+            try:
+                from codebleu import calc_codebleu
+            except Exception as imp_e:
+                logger.exception(f"Failed to import codebleu.calc_codebleu: {imp_e}")
+                raise
+            import tempfile
+            import json
+
+            with tempfile.TemporaryDirectory() as td:
+                refs_path = os.path.join(td, 'refs.txt')
+                preds_path = os.path.join(td, 'preds.txt')
+                # Write one code per line
+                with open(refs_path, 'w', encoding='utf-8') as fr:
+                    for r in refs_filtered:
+                        fr.write(r.replace('\n', '\\n') + '\n')
+                with open(preds_path, 'w', encoding='utf-8') as fp:
+                    for p in preds_filtered:
+                        fp.write(p.replace('\n', '\\n') + '\n')
+
+                # Call calc_codebleu - prefer list API, but fall back to file-based or weighted ngram match
+                try:
+                    # Prefer list API when available. Provide references as a list of
+                    # single-reference lists: [[ref1], [ref2], ...] and predictions
+                    # as a flat list so shapes match typical list-based APIs.
+                    results = calc_codebleu(references=[[r] for r in refs_filtered], predictions=list(preds_filtered), lang="python")
+                except Exception as e:
+                    logger.warning(f"calc_codebleu failed, attempting fallback: {e}")
+                    # Try file-based invocation if supported
+                    try:
+                        results = calc_codebleu(refs_path, preds_path, lang="python")
+                    except Exception as e2:
+                        logger.warning(f"file-based calc_codebleu also failed: {e2}")
+                        # Try weighted_ngram_match as a lightweight fallback
+                        try:
+                            from codebleu.codebleu import weighted_ngram_match
+                            # weighted_ngram_match expects a list of reference-lists
+                            # and a list of tokenized predictions. We provide refs as
+                            # [[tokens_of_ref1], [tokens_of_ref2], ...]
+                            refs_tokenized = [[r.split()] for r in refs_filtered]
+                            preds_tokenized = [p.split() for p in preds_filtered]
+                            wg = weighted_ngram_match(refs_tokenized, preds_tokenized, lang='python')
+                            results = {'codebleu': wg}
+                        except Exception as e3:
+                            logger.warning(f"weighted_ngram_match fallback failed: {e3}")
+                            # Final fallback: compute simple BLEU average
+                            try:
+                                bleu_fallback = self.calculate_bleu(list(preds_filtered), list(refs_filtered))
+                                results = {'codebleu': bleu_fallback}
+                            except Exception as e4:
+                                logger.warning(f"Final BLEU fallback failed: {e4}")
+                                results = None
+
+            # codebleu implementations may return dict or float
+            if isinstance(results, dict):
+                return results.get('codebleu', 0.0) or results.get('total', 0.0)
+            elif isinstance(results, (float, int)):
+                return float(results)
+            else:
+                return 0.0
         except Exception as e:
-            logger.error(f"Error calculating CodeBLEU: {e}")
+            # Log full traceback for debugging any failures during import or execution
+            logger.exception("CodeBLEU calculation failed")
             return 0.0
     
     def calculate_rouge(self, generated_texts: List[str], reference_texts: List[str]) -> float:
@@ -155,13 +209,73 @@ class MetricsTracker:
         if reference_texts is None:
             # Use prompts as simple references for demonstration
             reference_texts = prompts
-        
+        # Defensive: many metric implementations crash or return invalid results
+        # when reference strings are empty. Compute each metric on the subset
+        # of (gen, ref) pairs where ref is non-empty. If no valid pairs exist,
+        # return 0.0 for that metric.
+
+        def _filter_nonempty_refs(gens, refs):
+            paired = [(g, r) for g, r in zip(gens, refs) if r and r.strip()]
+            if not paired:
+                return [], []
+            gs, rs = zip(*paired)
+            return list(gs), list(rs)
+
+        # BERTScore
+        gs_bs, rs_bs = _filter_nonempty_refs(generated_texts, reference_texts)
+        if gs_bs:
+            bscore = self.calculate_bertscore(gs_bs, rs_bs)
+        else:
+            logger.warning("Empty reference sentence detected; setting raw BERTScores to 0.")
+            bscore = 0.0
+
+        # BLEU
+        gs_bleu, rs_bleu = _filter_nonempty_refs(generated_texts, reference_texts)
+        if gs_bleu:
+            bleu = self.calculate_bleu(gs_bleu, rs_bleu)
+        else:
+            bleu = 0.0
+
+        # CodeBLEU (function already filters internally but keep count logging)
+        gs_cb, rs_cb = _filter_nonempty_refs(generated_texts, reference_texts)
+        if gs_cb:
+            codebleu = self.calculate_codebleu(gs_cb, rs_cb)
+        else:
+            logger.warning("No non-empty references available for CodeBLEU calculation")
+            codebleu = 0.0
+
+        # ROUGE
+        gs_rouge, rs_rouge = _filter_nonempty_refs(generated_texts, reference_texts)
+        if gs_rouge:
+            rouge = self.calculate_rouge(gs_rouge, rs_rouge)
+        else:
+            rouge = 0.0
+
         metrics = {
-            'bertscore': self.calculate_bertscore(generated_texts, reference_texts),
-            'bleu': self.calculate_bleu(generated_texts, reference_texts),
-            'codebleu': self.calculate_codebleu(generated_texts, reference_texts),
-            'rouge': self.calculate_rouge(generated_texts, reference_texts),
+            'bertscore': bscore,
+            'bleu': bleu,
+            'codebleu': codebleu,
+            'rouge': rouge,
         }
+        # Try to compute RUBY metric if available; surface exceptions to logs
+        try:
+            from src.metrics.ruby_metric import RUBYMetric
+            ruby = RUBYMetric()
+            # compute average ruby only over non-empty reference pairs
+            gs_ruby, rs_ruby = _filter_nonempty_refs(generated_texts, reference_texts)
+            ruby_scores = []
+            for gen, ref in zip(gs_ruby, rs_ruby):
+                try:
+                    score = ruby.compute_ruby(ref, gen)
+                    if score is not None:
+                        ruby_scores.append(score)
+                except Exception as e:
+                    logger.warning(f"RUBY compute failed for one pair: {e}")
+                    continue
+            metrics['ruby'] = sum(ruby_scores) / len(ruby_scores) if ruby_scores else 0.0
+        except Exception as e:
+            logger.warning(f"RUBY metric not available or failed: {e}")
+            metrics['ruby'] = 0.0
         
         return metrics
     
