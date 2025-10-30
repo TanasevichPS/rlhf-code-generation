@@ -84,3 +84,7 @@ local.yml
 local.yaml
 local.json
 config/local.*
+
+conala-corpus/conala-mined.jsonl
+conala-corpus/*.jsonl
+*.jsonl
