@@ -18,9 +18,6 @@ import logging
 from dataclasses import dataclass
 import random
 from pathlib import Path
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
 from datasets import load_dataset  # Added import for Hugging Face datasets
 import sys
 from contextlib import contextmanager
@@ -31,29 +28,11 @@ try:
     _HF_HUB_AVAILABLE = True
 except Exception:
     _HF_HUB_AVAILABLE = False
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 
 from .config import ModernRLHFConfig, DataConfig
 
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 @dataclass
 class DataSample:
     """Container for a single data sample."""
@@ -63,18 +42,6 @@ class DataSample:
     rating: Optional[float] = None
     metadata: Optional[Dict[str, Any]] = None
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 class ModernDataLoader:
     """Modern data loader for RLHF training."""
     
@@ -87,10 +54,7 @@ class ModernDataLoader:
         np.random.seed(config.seed)
         
         logger.info(f"Initialized ModernDataLoader with config: {self.data_config}")
-    
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
+
     @contextmanager
     def _no_local_dataset_scripts(self):
         """Temporarily remove project paths from sys.path to avoid picking local conala.py."""
@@ -314,11 +278,7 @@ class ModernDataLoader:
         
         # Filter and clean data
         filtered_samples = self._filter_samples(samples, allow_empty_response=False)
-=======
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+
     def load_training_data(self) -> List[DataSample]:
         """Load training data from various sources."""
         logger.info("Loading training data...")
@@ -342,21 +302,10 @@ class ModernDataLoader:
         
         # Filter and clean data
         filtered_samples = self._filter_samples(all_samples)
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-        
         # Limit samples if specified
         if self.data_config.max_train_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_train_samples]
         
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
         logger.info(f"Total training samples loaded from CoNaLa: {len(filtered_samples)}")
         
         return filtered_samples
@@ -392,11 +341,7 @@ class ModernDataLoader:
         
         # Filter and clean data (allow empty responses for eval)
         filtered_samples = self._filter_samples(samples, allow_empty_response=True)
-=======
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+
         logger.info(f"Total training samples loaded: {len(filtered_samples)}")
         
         return filtered_samples
@@ -420,32 +365,16 @@ class ModernDataLoader:
                     logger.warning(f"Failed to load {dataset_file}: {e}")
         
         # Filter and clean data
-        filtered_samples = self._filter_samples(all_samples)
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-        
+        filtered_samples = self._filter_samples(all_samples)        
         # Limit samples if specified
         if self.data_config.max_eval_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_eval_samples]
-        
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
+
         logger.info(f"Total evaluation samples loaded from CoNaLa: {len(filtered_samples)}")
-=======
+
         logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
         logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
         logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         return filtered_samples
     
@@ -589,33 +518,24 @@ class ModernDataLoader:
             if name in df.columns:
                 return name
         return None
-    
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
+
     def _filter_samples(self, samples: List[Dict[str, Any]], allow_empty_response: bool = False) -> List[Dict[str, Any]]:
         """Filter and clean samples based on criteria.
         If allow_empty_response is True, do not enforce min response length and allow empty responses (for eval).
         """
-=======
+
     def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
         """Filter and clean samples based on criteria."""
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
+
     def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
         """Filter and clean samples based on criteria."""
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
+
+
     def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
         """Filter and clean samples based on criteria."""
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         filtered_samples = []
         
         for sample in samples:
-            # Check length constraints
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
             if len(sample['prompt']) < self.data_config.min_prompt_length:
                 continue
             if len(sample['prompt']) > self.data_config.max_prompt_length:
@@ -639,11 +559,7 @@ class ModernDataLoader:
             else:
                 if self._is_code_like(sample['prompt']) or self._is_code_like(sample['response']):
                     filtered_samples.append(sample)
-=======
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+
             if len(sample.prompt) < self.data_config.min_prompt_length:
                 continue
             if len(sample.prompt) > self.data_config.max_prompt_length:
@@ -660,14 +576,6 @@ class ModernDataLoader:
             # Check for code-like content (basic heuristic)
             if self._is_code_like(sample.prompt) or self._is_code_like(sample.response):
                 filtered_samples.append(sample)
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-        
         logger.info(f"Filtered {len(samples)} samples to {len(filtered_samples)} valid samples")
         
         return filtered_samples
