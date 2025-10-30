@@ -5,9 +5,15 @@
     "reward_model_name": "microsoft/codebert-base",
     "method": "dpo",
     "learning_rate": 1e-05,
+<<<<<<< HEAD
     "batch_size": 2,
     "max_length": 512,
     "num_epochs": 2,
+=======
+    "batch_size": 8,
+    "max_length": 512,
+    "num_epochs": 20,
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     "warmup_steps": 100,
     "beta": 0.1,
     "reference_free": false,
@@ -23,7 +29,11 @@
     "human_feedback_path": "./evaluation_results_server",
     "output_dir": "./rlhf_outputs",
     "eval_batch_size": 8,
+<<<<<<< HEAD
     "eval_samples": 20,
+=======
+    "eval_samples": 100,
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     "target_bertscore": 0.7,
     "target_codebleu": 0.6,
     "target_bleu": 0.4,
@@ -31,6 +41,7 @@
     "device": "cuda",
     "mixed_precision": true,
     "gradient_checkpointing": true,
+<<<<<<< HEAD
     "save_steps": 100,
     "eval_steps": 100,
     "logging_steps": 10,
@@ -39,4 +50,13 @@
   },
   "training_steps": 10,
   "epochs": 2
+=======
+    "save_steps": 500,
+    "eval_steps": 100,
+    "logging_steps": 10,
+    "seed": 42
+  },
+  "training_steps": 40,
+  "epochs": 20
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 }

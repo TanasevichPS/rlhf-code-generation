@@ -25,6 +25,7 @@ def main():
     config = get_research_config()
     
     # Adjust paths to use existing data
+<<<<<<< HEAD
     config.data.train_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-train.json"
     config.data.eval_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-test.json"
     config.data.human_feedback_path = "./evaluation_results_server"
@@ -33,15 +34,28 @@ def main():
     config.data.min_response_length = 0
     # Force local CoNaLa corpus (preferred over Hub)
     config.data.conala_local_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus"
+=======
+    config.data.train_data_path = "./datasets_for_training"
+    config.data.eval_data_path = "./datasets_for_eval"
+    config.data.human_feedback_path = "./evaluation_results_server"
+    config.data.output_path = "./modern_outputs"
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     
     # Set experiment name
     config.experiment_name = "modern_rlhf_experiment"
     
+<<<<<<< HEAD
     # Adjust training parameters for better convergence
     config.training.ppo_epochs = 10
     config.training.total_steps = 2000
     config.evaluation.eval_samples = 100
     config.training.learning_rate = 1e-5
+=======
+    # Adjust training parameters for quick testing
+    config.training.ppo_epochs = 3
+    config.training.total_steps = 500
+    config.evaluation.eval_samples = 50
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     
     # Set target metrics
     config.evaluation.target_bertscore = 0.7
@@ -49,14 +63,20 @@ def main():
     config.evaluation.target_bleu = 0.4
     config.evaluation.target_rouge = 0.5
     config.evaluation.target_ruby = 0.3
+<<<<<<< HEAD
     config.data.conala_local_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus"
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     
     print(f"📁 Training data: {config.data.train_data_path}")
     print(f"📁 Evaluation data: {config.data.eval_data_path}")
     print(f"📁 Human feedback: {config.data.human_feedback_path}")
     print(f"📁 Output directory: {config.data.output_path}")
+<<<<<<< HEAD
     if getattr(config.data, 'conala_local_path', None):
         print(f"📁 CoNaLa local corpus: {config.data.conala_local_path}")
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     print(f"🎯 Target BERTScore: {config.evaluation.target_bertscore}")
     print(f"🎯 Target CodeBLEU: {config.evaluation.target_codebleu}")
     print(f"🎯 Target BLEU: {config.evaluation.target_bleu}")

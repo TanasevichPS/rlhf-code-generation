@@ -87,4 +87,5 @@ config/local.*
 
 conala-corpus/conala-mined.jsonl
 conala-corpus/*.jsonl
-*.jsonl
+*.jsonlconala-corpus/conala-mined.jsonl
+conala-corpus/conala-mined.jsonl

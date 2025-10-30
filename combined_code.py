@@ -1,6 +1,7 @@
 
 
 # ------------------------------------------------------------
+<<<<<<< HEAD
 # FILE: .\111.py
 # ------------------------------------------------------------
 
@@ -137,6 +138,8 @@ except Exception as e:
 
 
 # ------------------------------------------------------------
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 # FILE: .\evaluate_multiple_datasets.py
 # ------------------------------------------------------------
 
@@ -418,6 +421,7 @@ if __name__ == "__main__":
     main()
 
 # ------------------------------------------------------------
+<<<<<<< HEAD
 # FILE: .\fix_dependencies.py
 # ------------------------------------------------------------
 
@@ -11586,6 +11590,8 @@ __all__ = ['DPOTrainer', 'SimpleDPOTrainer', 'DPO_AVAILABLE']
 
 
 # ------------------------------------------------------------
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 # FILE: .\scripts\compare_models.py
 # ------------------------------------------------------------
 
@@ -12533,7 +12539,11 @@ try:
     if (tmajor, tminor) < (2, 1):
         fail_missing_libs()
 
+<<<<<<< HEAD
     from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+=======
+    from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     from transformers import DataCollatorForLanguageModeling
     from torch.utils.data import Dataset
 except Exception:
@@ -12584,7 +12594,11 @@ def main():
 
     rows = read_sft(data_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(args.model_name)
+=======
+    model = AutoModel.from_pretrained(args.model_name)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 
     ds = SFTDataset(rows, tokenizer, max_length=args.max_length)
     data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
@@ -13798,7 +13812,11 @@ def main():
     # If TRL is available, run a minimal PPO loop. Otherwise, exit with code 2
     try:
         from transformers import AutoTokenizer
+<<<<<<< HEAD
         from transformers import AutoModelForCausalLM
+=======
+        from transformers import AutoModel 
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         # TRL imports (may be optional)
         import numpy as np
         from trl import PPOTrainer, PPOConfig
@@ -13808,7 +13826,11 @@ def main():
     # Minimal example using TRL's PPOTrainer (this is a high-level template).
     # Real runs should configure dataset, sampling/evaluation loops, and metrics.
     tokenizer = AutoTokenizer.from_pretrained(args.sft_model_dir)
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(args.sft_model_dir)
+=======
+    model = AutoModel.from_pretrained(args.sft_model_dir)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 
     # Load reward model as a callable: reward_fn(prompts, responses) -> np.array
     def reward_fn(prompts, responses):
@@ -13869,7 +13891,11 @@ if __name__ == "__main__":
 
 import os
 import argparse
+<<<<<<< HEAD
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+=======
+from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 import torch
 
 
@@ -13884,7 +13910,11 @@ def create_small_dataset():
 def run_sft_one_epoch(model_name: str, output_dir: str):
     data = create_small_dataset()
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side='left', use_fast=True)
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(model_name)
+=======
+    model = AutoModel.from_pretrained(model_name)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 
     texts = ["Prompt: " + p + "\nCode: " + r for p, r in data]
     enc = tokenizer(texts, truncation=True, padding=True, return_tensors='pt')
@@ -15563,7 +15593,11 @@ class RUBYMetric:
 
 import logging
 import ast
+<<<<<<< HEAD
 from transformers import AutoTokenizer, AutoModelForCausalLM
+=======
+from transformers import AutoTokenizer, AutoModel
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 import torch
 from typing import List
 
@@ -15618,10 +15652,17 @@ class ModelLoader:
     def _load_policy_model(self):
         """Load policy model with value head."""
         try:
+<<<<<<< HEAD
             # Try to use TRL's AutoModelForCausalLMWithValueHead if available.
             try:
                 from trl import AutoModelForCausalLMWithValueHead
                 model = AutoModelForCausalLMWithValueHead.from_pretrained(
+=======
+            # Try to use TRL's AutoModelWithValueHead if available.
+            try:
+                from trl import AutoModelWithValueHead
+                model = AutoModelWithValueHead.from_pretrained(
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
                     self.config.model_name,
                     torch_dtype=torch.float32,
                     trust_remote_code=True
@@ -15630,8 +15671,13 @@ class ModelLoader:
                 return model
             except Exception:
                 # If TRL is not available or incompatible, fall back to a standard causal LM.
+<<<<<<< HEAD
                 logger.warning("TRL AutoModelForCausalLMWithValueHead not available or failed to import; falling back to AutoModelForCausalLM")
                 model = AutoModelForCausalLM.from_pretrained(
+=======
+                logger.warning("TRL AutoModelWithValueHead not available or failed to import; falling back to AutoModel")
+                model = AutoModel.from_pretrained(
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
                     self.config.model_name,
                     torch_dtype=torch.float32,
                     trust_remote_code=True
