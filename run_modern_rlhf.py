@@ -27,6 +27,7 @@ def main():
     # Adjust paths to use existing data
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     config.data.train_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-train.json"
     config.data.eval_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-test.json"
     config.data.human_feedback_path = "./evaluation_results_server"
@@ -38,11 +39,16 @@ def main():
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     config.data.train_data_path = "./datasets_for_training"
     config.data.eval_data_path = "./datasets_for_eval"
     config.data.human_feedback_path = "./evaluation_results_server"
     config.data.output_path = "./modern_outputs"
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -50,6 +56,7 @@ def main():
     # Set experiment name
     config.experiment_name = "modern_rlhf_experiment"
     
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
     # Adjust training parameters for better convergence
@@ -60,11 +67,16 @@ def main():
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     # Adjust training parameters for quick testing
     config.training.ppo_epochs = 3
     config.training.total_steps = 500
     config.evaluation.eval_samples = 50
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -77,7 +89,10 @@ def main():
     config.evaluation.target_ruby = 0.3
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     config.data.conala_local_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus"
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
@@ -89,8 +104,11 @@ def main():
     print(f"📁 Output directory: {config.data.output_path}")
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     if getattr(config.data, 'conala_local_path', None):
         print(f"📁 CoNaLa local corpus: {config.data.conala_local_path}")
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======

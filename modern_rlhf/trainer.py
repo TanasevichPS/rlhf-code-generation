@@ -23,12 +23,16 @@ import time
 from tqdm import tqdm
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 try:
     import wandb  # Optional
     _WANDB_AVAILABLE = True
 except Exception:  # broad to handle env issues
     wandb = None
     _WANDB_AVAILABLE = False
+=======
+import wandb
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 import wandb
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -94,8 +98,12 @@ class PPOTrainer:
         # Initialize wandb if available
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
         self._wandb_enabled = False
         if config.verbose and not config.debug and _WANDB_AVAILABLE:
+=======
+        if config.verbose and not config.debug:
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
         if config.verbose and not config.debug:
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -111,7 +119,10 @@ class PPOTrainer:
                 )
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
                 self._wandb_enabled = True
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
@@ -363,6 +374,7 @@ class PPOTrainer:
             # Log to wandb
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
             if self._wandb_enabled:
                 try:
                     wandb.log({
@@ -379,6 +391,8 @@ class PPOTrainer:
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             if hasattr(self, 'wandb') and self.wandb:
                 wandb.log({
                     'step': step.step,
@@ -390,6 +404,9 @@ class PPOTrainer:
                     **step.metrics
                 })
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -415,7 +432,10 @@ class PPOTrainer:
         all_rewards = []
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
         all_references = []
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
@@ -437,6 +457,7 @@ class PPOTrainer:
                 all_rewards.extend(rewards.tolist())
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
                 if 'references' in batch:
                     all_references.extend(batch['references'])
         
@@ -455,6 +476,8 @@ class PPOTrainer:
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         # Compute evaluation metrics
         eval_metrics = {}
@@ -467,6 +490,9 @@ class PPOTrainer:
             metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, references)
             
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1

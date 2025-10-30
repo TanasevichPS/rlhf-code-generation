@@ -6,9 +6,15 @@
     "learning_rate": 1e-05,
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     "batch_size": 2,
     "max_length": 512,
     "num_epochs": 2,
+=======
+    "batch_size": 8,
+    "max_length": 512,
+    "num_epochs": 20,
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     "batch_size": 8,
     "max_length": 512,
@@ -36,7 +42,11 @@
     "eval_batch_size": 8,
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     "eval_samples": 20,
+=======
+    "eval_samples": 100,
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     "eval_samples": 100,
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -52,6 +62,7 @@
     "gradient_checkpointing": true,
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     "save_steps": 100,
     "eval_steps": 100,
     "logging_steps": 10,
@@ -60,11 +71,16 @@
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     "save_steps": 500,
     "eval_steps": 100,
     "logging_steps": 10,
     "seed": 42
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -72,6 +88,7 @@
   "training_results": {
     "training_stats": [
       {
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
         "loss": 0.676581732886288,
@@ -85,6 +102,8 @@
         "rejected_log_prob": -3.1610499107243917,
         "log_ratio": 1.2319392832024942
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         "loss": 0.657014103636657,
@@ -206,6 +225,9 @@
         "rejected_log_prob": -2.92300828408586,
         "log_ratio": 0.9490690213326416
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -214,6 +236,7 @@
     "epoch_metrics": [
       {
         "ruby": 0.982,
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
         "bertscore": 0.3696512197974545,
@@ -228,6 +251,8 @@
         "bleu": 0.16459844627728848,
         "rouge": 0.25270991377896845
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         "bertscore": 0.34748803928517785,
@@ -368,6 +393,9 @@
         "bleu": 0.6,
         "rouge": 0.7
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -418,6 +446,7 @@
   },
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
   "timestamp": "2025-10-27T15:13:42.769262",
   "epoch_metrics": [
     {
@@ -434,6 +463,8 @@
       "bleu": 0.16459844627728848,
       "rouge": 0.25270991377896845
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
   "timestamp": "2025-10-25T01:14:18.627620",
@@ -578,6 +609,9 @@
       "bleu": 0.6,
       "rouge": 0.7
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1

@@ -20,6 +20,7 @@ import random
 from pathlib import Path
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 from datasets import load_dataset  # Added import for Hugging Face datasets
 import sys
 from contextlib import contextmanager
@@ -34,6 +35,8 @@ except Exception:
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 
 from .config import ModernRLHFConfig, DataConfig
 
@@ -41,6 +44,10 @@ logger = logging.getLogger(__name__)
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -58,6 +65,10 @@ class DataSample:
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -77,6 +88,7 @@ class ModernDataLoader:
         
         logger.info(f"Initialized ModernDataLoader with config: {self.data_config}")
     
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
     @contextmanager
@@ -305,6 +317,8 @@ class ModernDataLoader:
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
     def load_training_data(self) -> List[DataSample]:
         """Load training data from various sources."""
         logger.info("Loading training data...")
@@ -329,6 +343,9 @@ class ModernDataLoader:
         # Filter and clean data
         filtered_samples = self._filter_samples(all_samples)
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -337,6 +354,7 @@ class ModernDataLoader:
         if self.data_config.max_train_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_train_samples]
         
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
         logger.info(f"Total training samples loaded from CoNaLa: {len(filtered_samples)}")
@@ -377,6 +395,8 @@ class ModernDataLoader:
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         logger.info(f"Total training samples loaded: {len(filtered_samples)}")
         
         return filtered_samples
@@ -402,6 +422,9 @@ class ModernDataLoader:
         # Filter and clean data
         filtered_samples = self._filter_samples(all_samples)
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -412,7 +435,11 @@ class ModernDataLoader:
         
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
         logger.info(f"Total evaluation samples loaded from CoNaLa: {len(filtered_samples)}")
+=======
+        logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
         logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -565,6 +592,7 @@ class ModernDataLoader:
     
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     def _filter_samples(self, samples: List[Dict[str, Any]], allow_empty_response: bool = False) -> List[Dict[str, Any]]:
         """Filter and clean samples based on criteria.
         If allow_empty_response is True, do not enforce min response length and allow empty responses (for eval).
@@ -577,10 +605,15 @@ class ModernDataLoader:
     def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
         """Filter and clean samples based on criteria."""
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+    def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
+        """Filter and clean samples based on criteria."""
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         filtered_samples = []
         
         for sample in samples:
             # Check length constraints
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
             if len(sample['prompt']) < self.data_config.min_prompt_length:
@@ -609,6 +642,8 @@ class ModernDataLoader:
 =======
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             if len(sample.prompt) < self.data_config.min_prompt_length:
                 continue
             if len(sample.prompt) > self.data_config.max_prompt_length:
@@ -626,6 +661,9 @@ class ModernDataLoader:
             if self._is_code_like(sample.prompt) or self._is_code_like(sample.response):
                 filtered_samples.append(sample)
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
