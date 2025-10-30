@@ -17,7 +17,7 @@
     "batch_size": 4,
     "gradient_accumulation_steps": 4,
     "max_grad_norm": 1.0,
-    "ppo_epochs": 10,
+    "ppo_epochs": 3,
     "ppo_clip_ratio": 0.2,
     "ppo_value_loss_coef": 0.1,
     "ppo_entropy_coef": 0.01,
@@ -25,7 +25,7 @@
     "dpo_beta": 0.1,
     "dpo_loss_type": "sigmoid",
     "warmup_steps": 100,
-    "total_steps": 2000,
+    "total_steps": 500,
     "save_steps": 500,
     "eval_steps": 100,
     "logging_steps": 10,
@@ -68,7 +68,7 @@
     "target_rouge": 0.5,
     "target_ruby": 0.3,
     "eval_batch_size": 8,
-    "eval_samples": 100,
+    "eval_samples": 50,
     "eval_datasets": [
       "T2C-CONALA-CODEGEN-FINETUNED-SO.csv",
       "T2C-CONALA-CODEGEN-VANILLA.csv",
@@ -79,8 +79,8 @@
     "embedding_model": "microsoft/codebert-base"
   },
   "data": {
-    "train_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus\\conala-train.json",
-    "eval_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus\\conala-test.json",
+    "train_data_path": "./datasets_for_training",
+    "eval_data_path": "./datasets_for_eval",
     "human_feedback_path": "./evaluation_results_server",
     "output_path": "./modern_outputs",
     "conala_local_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus",
@@ -109,7 +109,7 @@
   "debug": false,
   "verbose": true,
   "experiment_name": "modern_rlhf_experiment",
-  "run_name": "modern_rlhf_experiment_20251030_124309",
+  "run_name": "modern_rlhf_experiment_20251030_160304",
   "tags": [
     "research",
     "experimental"

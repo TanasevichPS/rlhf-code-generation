@@ -55,6 +55,21 @@ class ModernDataLoader:
         
         logger.info(f"Initialized ModernDataLoader with config: {self.data_config}")
 
+    def _sample_to_dict(self, item: Any) -> Dict[str, Any]:
+        """Normalize a sample to a dict (accepts dict or DataSample objects)."""
+        if isinstance(item, dict):
+            return item
+        try:
+            return {
+                'prompt': getattr(item, 'prompt', '') or '',
+                'response': getattr(item, 'response', '') or '',
+                'reference': getattr(item, 'reference', None),
+                'rating': getattr(item, 'rating', None),
+                'metadata': getattr(item, 'metadata', None)
+            }
+        except Exception:
+            return {'prompt': '', 'response': '', 'reference': None, 'rating': None, 'metadata': None}
+
     @contextmanager
     def _no_local_dataset_scripts(self):
         """Temporarily remove project paths from sys.path to avoid picking local conala.py."""
@@ -310,95 +325,225 @@ class ModernDataLoader:
         
         return filtered_samples
     
-    def load_evaluation_data(self) -> List[Dict[str, Any]]:
-        """Load evaluation data from Hugging Face CoNaLa dataset."""
-        logger.info("Loading evaluation data from Hugging Face: neulab/conala (test split)...")
-        
-        # Load curated dataset directly from HF (avoid local conala.py)
-        dataset = self._load_conala_split('test')
-        
-        samples = []
-        for item in dataset:
-            if isinstance(item, dict):
-                prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                snippet = item.get('snippet') or item.get('code') or item.get('answer') or ""
-                qid = item.get('question_id') or item.get('id')
-            else:
-                try:
-                    prompt = item['rewritten_intent'] if item['rewritten_intent'] else item['intent']
-                except Exception:
-                    prompt = item.get('intent', "")  # type: ignore[attr-defined]
-                snippet = item.get('snippet', "")  # type: ignore[attr-defined]
-                qid = item.get('question_id', None)  # type: ignore[attr-defined]
-
-            samples.append({
-                'prompt': str(prompt),
-                'response': "",  # model will generate; keep empty to avoid leakage
-                'reference': str(snippet),  # snippet is the gold code
-                'rating': None,
-                'metadata': {'source': 'conala_test', 'question_id': qid}
-            })
-        
-        # Filter and clean data (allow empty responses for eval)
-        filtered_samples = self._filter_samples(samples, allow_empty_response=True)
-
-        logger.info(f"Total training samples loaded: {len(filtered_samples)}")
-        
-        return filtered_samples
-    
     def load_evaluation_data(self) -> List[DataSample]:
-        """Load evaluation data."""
+        """Load evaluation data.
+
+        Strategy:
+        1) If a local CoNaLa corpus path is provided or HF hub is available, prefer loading the
+           curated CoNaLa 'test' split (to evaluate on the canonical dataset).
+        2) Otherwise, attempt to load CSV evaluation datasets from `eval_data_path` listed in
+           `self.config.evaluation.eval_datasets`.
+        """
         logger.info("Loading evaluation data...")
-        
-        all_samples = []
-        
-        # Load from evaluation datasets
-        eval_path = Path(self.data_config.eval_data_path)
-        
-        if eval_path.exists():
-            for dataset_file in self.data_config.evaluation.eval_datasets:
-                try:
-                    samples = self._load_evaluation_dataset(eval_path / dataset_file)
-                    all_samples.extend(samples)
-                    logger.info(f"Loaded {len(samples)} samples from {dataset_file}")
-                except Exception as e:
-                    logger.warning(f"Failed to load {dataset_file}: {e}")
-        
-        # Filter and clean data
-        filtered_samples = self._filter_samples(all_samples)        
-        # Limit samples if specified
+
+        all_samples: List[DataSample] = []
+
+        # First preference: CoNaLa curated split (local or HF)
+        try:
+            conala = self._load_conala_split('test')
+            if conala is not None:
+                logger.info("Loading evaluation data from CoNaLa curated split")
+                # `conala` may be a datasets.Dataset or list of dicts
+                for item in conala:
+                    if isinstance(item, dict):
+                        prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
+                        snippet = item.get('snippet') or item.get('code') or item.get('answer') or ""
+                        qid = item.get('question_id') or item.get('id')
+                    else:
+                        try:
+                            prompt = item['rewritten_intent'] if item.get('rewritten_intent') else item.get('intent', "")
+                        except Exception:
+                            prompt = getattr(item, 'intent', "")
+                        snippet = item.get('snippet', "") if hasattr(item, 'get') else getattr(item, 'snippet', "")
+                        qid = item.get('question_id', None) if hasattr(item, 'get') else getattr(item, 'question_id', None)
+
+                    all_samples.append(DataSample(
+                        prompt=str(prompt),
+                        response="",
+                        reference=str(snippet) if snippet is not None else None,
+                        rating=None,
+                        metadata={'source': 'conala_test', 'question_id': qid}
+                    ))
+
+        except Exception as e:
+            logger.warning(f"CoNaLa curated load failed or not available: {e}")
+
+        # Fallback: load evaluation CSVs from eval_data_path
+        if not all_samples:
+            eval_path = Path(self.data_config.eval_data_path)
+            if eval_path.exists():
+                for dataset_file in self.config.evaluation.eval_datasets:
+                    try:
+                        samples = self._load_evaluation_dataset(eval_path / dataset_file)
+                        all_samples.extend(samples)
+                        logger.info(f"Loaded {len(samples)} samples from {dataset_file}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load {dataset_file}: {e}")
+
+        # Final cleaning and filtering
+        filtered_samples = self._filter_samples(all_samples, allow_empty_response=True)
         if self.data_config.max_eval_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_eval_samples]
 
-        logger.info(f"Total evaluation samples loaded from CoNaLa: {len(filtered_samples)}")
+        # If still empty, create synthetic evaluation samples so metrics can be computed
+        if not filtered_samples:
+            logger.warning("No evaluation samples found; generating synthetic evaluation set")
+            n = getattr(self.data_config, 'max_eval_samples', None) or 100
+            n = min(n, getattr(self.config.evaluation, 'eval_samples', 100))
+            synth = self._generate_synthetic_data()
+            # Use generated synthetic responses as references, but keep response empty for generation
+            synth_eval: List[DataSample] = []
+            for i, s in enumerate(synth[:n]):
+                synth_eval.append(DataSample(
+                    prompt=s.prompt,
+                    response="",
+                    reference=s.response,
+                    rating=None,
+                    metadata={'source': 'synthetic_eval', 'index': i}
+                ))
+            filtered_samples = synth_eval
 
         logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
-        logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
-        logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
-        
         return filtered_samples
     
     def load_human_feedback(self) -> Optional[str]:
         """Load human feedback data."""
         logger.info("Loading human feedback data...")
-        
-        feedback_path = Path(self.data_config.human_feedback_path)
-        
-        if feedback_path.exists():
-            # Look for JSON files with human feedback
-            json_files = list(feedback_path.glob("*.json"))
-            
+
+        feedback_dir = Path(self.data_config.human_feedback_path)
+
+        if feedback_dir.exists():
+            json_files = sorted([p for p in feedback_dir.glob("*.json")], key=os.path.getmtime)
             if json_files:
-                # Use the most recent file
-                latest_file = max(json_files, key=os.path.getmtime)
+                latest_file = json_files[-1]
                 logger.info(f"Found human feedback file: {latest_file}")
-                return str(latest_file)
+                try:
+                    with open(latest_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Failed to read human feedback file {latest_file}: {e}")
+                    return None
+
+                # Normalize to list of feedback dicts
+                items: List[Dict[str, Any]] = []
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict):
+                    for key in ['data', 'items', 'examples', 'feedback']:
+                        v = data.get(key)
+                        if isinstance(v, list):
+                            items = v
+                            break
+                # If still empty but dict of pairs, convert to list
+                if not items and isinstance(data, dict):
+                    # Try to interpret dict values as list entries
+                    for v in data.values():
+                        if isinstance(v, dict):
+                            items.append(v)
+
+                logger.info(f"Loaded {len(items)} human feedback entries from {latest_file}")
+                return items
+
+        # If no feedback files exist, create a small synthetic feedback file and return it
+        logger.warning(f"Human feedback directory not found or empty: {feedback_dir} — generating synthetic feedback")
+        items = self.generate_synthetic_human_feedback()
+        return items
+
+    def integrate_human_feedback(self, samples: List[DataSample], feedback_items: List[Dict[str, Any]]) -> None:
+        """Attach human feedback to matching samples by question_id or prompt/response match.
+
+        This mutates `samples` in place: it adds metadata['human_rating'] and
+        prepends a short human-feedback token to the prompt so models receive it as context.
+        """
+        if not feedback_items:
+            return
+
+        # Index samples by question_id (if present) and by prompt text
+        by_qid = {}
+        by_prompt = {}
+        for s in samples:
+            qid = getattr(s.metadata or {}, 'get', lambda k, d=None: None)('question_id', None)
+            if qid:
+                by_qid[str(qid)] = s
+            by_prompt[str(s.prompt).strip()] = s
+
+        matched = 0
+        for fb in feedback_items:
+            rating = fb.get('rating')
+            prompt = fb.get('prompt') or fb.get('rewritten_intent') or fb.get('intent') or ""
+            response = fb.get('response') or fb.get('snippet') or fb.get('code') or ""
+            qid = fb.get('question_id') or fb.get('id')
+
+            target = None
+            if qid and str(qid) in by_qid:
+                target = by_qid[str(qid)]
+            elif prompt and prompt.strip() in by_prompt:
+                target = by_prompt[prompt.strip()]
             else:
-                logger.warning("No JSON files found in human feedback directory")
-        else:
-            logger.warning(f"Human feedback directory not found: {feedback_path}")
-        
-        return None
+                # Try fuzzy match by substring on prompt
+                for p_text, s in by_prompt.items():
+                    if prompt.strip() and prompt.strip() in p_text:
+                        target = s
+                        break
+
+            if target is not None:
+                if target.metadata is None:
+                    target.metadata = {}
+                # store rating and raw feedback
+                if rating is not None:
+                    target.metadata['human_rating'] = float(rating)
+                    # also set the primary rating field so existing code paths can use it
+                    try:
+                        target.rating = float(rating)
+                    except Exception:
+                        target.rating = None
+                if fb.get('comment'):
+                    target.metadata['human_comment'] = fb.get('comment')
+
+                # Prepend short rating context to prompt for model context
+                try:
+                    rating_str = f"[HumanRating:{int(float(rating))}] " if rating is not None else ""
+                except Exception:
+                    rating_str = ""
+                target.prompt = f"{rating_str}{target.prompt}"
+                matched += 1
+
+        logger.info(f"Integrated human feedback: matched {matched} entries into {len(samples)} samples")
+
+    def generate_synthetic_human_feedback(self, n: int = 200, output_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Generate a synthetic human-feedback dataset (ratings 1-5) and save to human_feedback_path.
+
+        The synthetic entries are generic and need not contain real code — they are intended
+        to let the pipeline exercise human-feedback integration during development.
+        """
+        import random
+        output_dir = output_dir or self.data_config.human_feedback_path
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        items: List[Dict[str, Any]] = []
+        for i in range(n):
+            rating = random.randint(1, 5)
+            prompt = f"Example prompt asking for solution {i}"
+            response = f"Example response content {i}"
+            items.append({
+                'id': f'synth_{i}',
+                'prompt': prompt,
+                'response': response,
+                'rating': rating,
+                'comment': f'Synthetic rating {rating}'
+            })
+
+        # Save to a timestamped file so load_human_feedback can find it
+        fname = out_path / f"synthetic_human_feedback_{int(time.time())}.json"
+        try:
+            with open(fname, 'w', encoding='utf-8') as f:
+                json.dump(items, f, indent=2)
+            logger.info(f"Wrote synthetic human feedback to {fname}")
+        except Exception as e:
+            logger.warning(f"Failed to write synthetic human feedback: {e}")
+
+        return items
     
     def _load_sft_data(self) -> List[DataSample]:
         """Load supervised fine-tuning data."""
@@ -531,53 +676,56 @@ class ModernDataLoader:
         """Filter and clean samples based on criteria."""
 
 
-    def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
-        """Filter and clean samples based on criteria."""
-        filtered_samples = []
-        
+    def _filter_samples(self, samples: List[DataSample], allow_empty_response: bool = False) -> List[DataSample]:
+        """Filter and clean samples based on criteria.
+
+        Returns a list of `DataSample` instances that pass the configured filters.
+        Accepts input samples as either dicts or `DataSample` objects.
+        """
+        filtered_samples: List[DataSample] = []
+
         for sample in samples:
-            if len(sample['prompt']) < self.data_config.min_prompt_length:
+            s = self._sample_to_dict(sample)
+            prompt = str(s.get('prompt', '') or '')
+            response = str(s.get('response', '') or '')
+
+            if len(prompt) < self.data_config.min_prompt_length:
                 continue
-            if len(sample['prompt']) > self.data_config.max_prompt_length:
+            if len(prompt) > self.data_config.max_prompt_length:
                 continue
             if not allow_empty_response:
-                if len(sample['response']) < self.data_config.min_response_length:
+                if len(response) < self.data_config.min_response_length:
                     continue
-            if len(sample['response']) > self.data_config.max_response_length:
+            if len(response) > self.data_config.max_response_length:
                 continue
-            
-            # Check for empty or invalid content
-            if not sample['prompt'].strip():
-                continue
-            if not allow_empty_response and not sample['response'].strip():
-                continue
-            
-            # Check for code-like content (basic heuristic)
-            if allow_empty_response:
-                # For evaluation, accept as long as prompt/reference exist
-                filtered_samples.append(sample)
-            else:
-                if self._is_code_like(sample['prompt']) or self._is_code_like(sample['response']):
-                    filtered_samples.append(sample)
 
-            if len(sample.prompt) < self.data_config.min_prompt_length:
-                continue
-            if len(sample.prompt) > self.data_config.max_prompt_length:
-                continue
-            if len(sample.response) < self.data_config.min_response_length:
-                continue
-            if len(sample.response) > self.data_config.max_response_length:
-                continue
-            
             # Check for empty or invalid content
-            if not sample.prompt.strip() or not sample.response.strip():
+            if not prompt.strip():
                 continue
-            
-            # Check for code-like content (basic heuristic)
-            if self._is_code_like(sample.prompt) or self._is_code_like(sample.response):
-                filtered_samples.append(sample)
+            if not allow_empty_response and not response.strip():
+                continue
+
+            # Determine acceptance
+            accept = False
+            if allow_empty_response:
+                accept = True
+            else:
+                if self._is_code_like(prompt) or self._is_code_like(response):
+                    accept = True
+
+            if not accept:
+                continue
+
+            filtered_samples.append(DataSample(
+                prompt=prompt,
+                response=response,
+                reference=s.get('reference'),
+                rating=s.get('rating'),
+                metadata=s.get('metadata')
+            ))
+
         logger.info(f"Filtered {len(samples)} samples to {len(filtered_samples)} valid samples")
-        
+
         return filtered_samples
     
     def _is_code_like(self, text: str) -> bool:

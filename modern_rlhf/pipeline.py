@@ -85,22 +85,46 @@ class ModernRLHFPipeline:
                 logging.FileHandler(os.path.join(self.config.data.output_path, 'pipeline.log'))
             ]
         )
+
+    def _sample_to_dict(self, item: Any) -> Dict[str, Any]:
+        """Normalize a sample to a dict with known keys.
+
+        Accepts either a dict or a DataSample-like object (dataclass / simple object).
+        """
+        if isinstance(item, dict):
+            return item
+        # Dataclass-like object or simple object with attributes
+        try:
+            return {
+                'prompt': getattr(item, 'prompt', '') or '',
+                'response': getattr(item, 'response', '') or '',
+                'reference': getattr(item, 'reference', None),
+                'rating': getattr(item, 'rating', None),
+                'metadata': getattr(item, 'metadata', None)
+            }
+        except Exception:
+            return {'prompt': '', 'response': '', 'reference': None, 'rating': None, 'metadata': None}
     
     def load_data(self) -> Tuple[Any, Any, Any]:
         """Load training and evaluation data."""
         logger.info("Loading data...")
-        
-        # Load training data
-        train_data = self.data_loader.load_training_data()
-        
-        # Load evaluation data
-        eval_data = self.data_loader.load_evaluation_data()
-        
-        # Load human feedback data
+        # Load human feedback first so it can be integrated into samples
         human_feedback = self.data_loader.load_human_feedback()
-        
-        logger.info(f"Loaded {len(train_data)} training samples, {len(eval_data)} eval samples")
-        
+
+        # Load training and evaluation data
+        train_data = self.data_loader.load_training_data()
+        eval_data = self.data_loader.load_evaluation_data()
+
+        # Integrate human feedback into samples (if available)
+        if human_feedback:
+            try:
+                self.data_loader.integrate_human_feedback(train_data, human_feedback)
+                self.data_loader.integrate_human_feedback(eval_data, human_feedback)
+            except Exception as e:
+                logger.warning(f"Failed to integrate human feedback into samples: {e}")
+
+        logger.info(f"Loaded {len(train_data)} training samples, {len(eval_data)} eval samples; human feedback entries: {len(human_feedback) if human_feedback else 0}")
+
         return train_data, eval_data, human_feedback
     
     def prepare_reward_model(self, train_data: Any, human_feedback: Any) -> ModernRewardModel:
@@ -171,10 +195,25 @@ class ModernRLHFPipeline:
         for i in range(0, len(train_data), batch_size):
             batch_data = train_data[i:i + batch_size]
             
+            # Prepare human feedback as a separate field so the model can distinguish it
+            human_feedback_list = []
+            prompts = []
+            responses = []
+            for item in batch_data:
+                s = self._sample_to_dict(item)
+                prompts.append(s.get('prompt', ''))
+                responses.append(s.get('response', ''))
+                meta = s.get('metadata') or {}
+                human_feedback_list.append({
+                    'rating': s.get('rating', None) if s.get('rating', None) is not None else meta.get('human_rating', None),
+                    'comment': meta.get('human_comment', None),
+                    'logits': meta.get('human_logits', None)
+                })
+
             batch = {
-                'prompts': [item['prompt'] for item in batch_data],
-                'responses': [item['response'] for item in batch_data],
-                'human_ratings': [item.get('rating', None) for item in batch_data]
+                'prompts': prompts,
+                'responses': responses,
+                'human_feedback': human_feedback_list
             }
             
             batches.append(batch)
@@ -222,14 +261,14 @@ class ModernRLHFPipeline:
             if is_training:
                 # For training, we need prompt-response pairs
                 batch = {
-                    'prompts': [item['prompt'] for item in batch_data],
-                    'responses': [item.get('response', '') for item in batch_data]
+                    'prompts': [self._sample_to_dict(item)['prompt'] for item in batch_data],
+                    'responses': [self._sample_to_dict(item).get('response', '') for item in batch_data]
                 }
             else:
                 # For evaluation, we need prompts and references
                 batch = {
-                    'prompts': [item['prompt'] for item in batch_data],
-                    'references': [item.get('reference', '') for item in batch_data]
+                    'prompts': [self._sample_to_dict(item)['prompt'] for item in batch_data],
+                    'references': [self._sample_to_dict(item).get('reference', '') for item in batch_data]
                 }
             
             dataloader.append(batch)
@@ -244,8 +283,8 @@ class ModernRLHFPipeline:
             raise ValueError("RLHF trainer must be prepared before evaluation")
         
         # Generate responses
-        all_prompts = [item['prompt'] for item in eval_data]
-        all_references = [item.get('reference', '') for item in eval_data]
+        all_prompts = [self._sample_to_dict(item)['prompt'] for item in eval_data]
+        all_references = [self._sample_to_dict(item).get('reference', '') for item in eval_data]
         
         # Generate responses in batches
         all_responses = []
@@ -337,8 +376,12 @@ class ModernRLHFPipeline:
             return self.results
             
         except Exception as e:
+            import traceback as _tb
             logger.error(f"Pipeline failed: {e}")
-            
+            logger.error(_tb.format_exc())
+            # Also print traceback to stdout for immediate visibility
+            print(_tb.format_exc())
+
             self.results = PipelineResults(
                 config=self.config,
                 reward_model_metrics={},
@@ -350,7 +393,7 @@ class ModernRLHFPipeline:
                 success=False,
                 error_message=str(e)
             )
-            
+
             return self.results
     
     def _compute_final_metrics(self, evaluation_metrics: Dict[str, float]) -> Dict[str, float]:
@@ -395,13 +438,6 @@ class ModernRLHFPipeline:
             if isinstance(obj, _np.ndarray):
                 return obj.tolist()
             return obj
-        
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         # Save results to JSON
         results_path = os.path.join(self.config.data.output_path, 'pipeline_results.json')
         
@@ -419,7 +455,8 @@ class ModernRLHFPipeline:
         }
         
         with open(results_path, 'w') as f:
-            json.dump(results_dict, f, indent=2)
+            # Ensure all objects are JSON-serializable (convert numpy types, tensors, etc.)
+            json.dump(_to_json_safe(results_dict), f, indent=2)
         
         # Save configuration
         config_path = os.path.join(self.config.data.output_path, 'config.json')
@@ -471,12 +508,6 @@ class ModernRLHFPipeline:
         with open(training_results_path, 'w') as f:
             json.dump(_to_json_safe(training_results), f, indent=2)
 
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         logger.info(f"Results saved to {results_path}")
     
     def visualize_results(self):

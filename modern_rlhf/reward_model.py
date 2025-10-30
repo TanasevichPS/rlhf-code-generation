@@ -73,18 +73,6 @@ class HumanFeedbackIntegrator:
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-=======
-                # Process feedback data
-                for item in feedback_data:
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-                # Process feedback data
-                for item in feedback_data:
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-                # Process feedback data
-                for item in feedback_data:
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
                     prompt = item.get('prompt', '')
                     response = item.get('response', '')
                     rating = item.get('rating', 0.0)
@@ -391,28 +379,31 @@ class ModernRewardModel(nn.Module):
         component_rewards = self.compute_reward_components(prompts, responses)
         
         # Combine neural and component rewards
-        final_rewards = []
-        for i, (neural_reward, component_reward) in enumerate(zip(neural_rewards['total'], component_rewards)):
-            # Weighted combination
-            combined_reward = (
-                neural_reward.item() * 0.7 +  # Neural network prediction
-                component_reward.total_reward * 0.3  # Component-based reward
-            )
-            
+        final_reward_tensors: List[torch.Tensor] = []
+        total_tensor = neural_rewards['total']
+        for i, component_reward in enumerate(component_rewards):
+            neural_reward = total_tensor[i]
+
+            # Weighted combination: keep tensor operations to preserve gradients
+            combined_reward = neural_reward * 0.7 + float(component_reward.total_reward) * 0.3
+
             # Apply normalization and clipping
             if self.config.reward_normalization:
-                combined_reward = torch.sigmoid(torch.tensor(combined_reward))
-            
+                combined_reward = torch.sigmoid(combined_reward)
+
             if self.config.reward_clipping:
                 combined_reward = torch.clamp(
-                    torch.tensor(combined_reward),
+                    combined_reward,
                     -self.config.reward_clip_value,
                     self.config.reward_clip_value
                 )
-            
-            final_rewards.append(combined_reward.item())
-        
-        return torch.tensor(final_rewards, dtype=torch.float32)
+
+            final_reward_tensors.append(combined_reward)
+
+        if final_reward_tensors:
+            return torch.stack(final_reward_tensors).view(-1)
+        else:
+            return torch.tensor([], dtype=torch.float32)
     
     def load_human_feedback(self, feedback_path: str):
         """Load human feedback data."""
@@ -481,20 +472,43 @@ class RewardModelTrainer:
         
         prompts = batch['prompts']
         responses = batch['responses']
-        human_ratings = batch.get('human_ratings', None)
-        
+        # Support new structured human feedback field (`human_feedback`) or legacy `human_ratings`
+        human_feedback = batch.get('human_feedback', None)
+        human_ratings = None
+        if human_feedback is not None:
+            # extract numeric ratings if present
+            try:
+                human_ratings = [None if hf is None else (hf.get('rating') if isinstance(hf, dict) else hf) for hf in human_feedback]
+            except Exception:
+                human_ratings = None
+        else:
+            human_ratings = batch.get('human_ratings', None)
+
         # Compute rewards
         predicted_rewards = self.model.compute_reward(prompts, responses)
-        
+
         # Compute loss
+        # If human_ratings is provided and contains no None values, use them as targets.
+        use_human_targets = False
         if human_ratings is not None:
-            # Use human ratings as targets
-            target_rewards = torch.tensor(human_ratings, dtype=torch.float32)
+            try:
+                # Normalize and check for None
+                processed = [None if v is None else float(v) for v in human_ratings]
+                if all(v is not None for v in processed) and len(processed) == len(prompts):
+                    target_rewards = torch.tensor(processed, dtype=torch.float32)
+                    use_human_targets = True
+                else:
+                    use_human_targets = False
+            except Exception:
+                use_human_targets = False
+
+        if use_human_targets:
             loss = F.mse_loss(predicted_rewards, target_rewards)
         else:
             # Use component-based rewards as targets
             component_rewards = self.model.compute_reward_components(prompts, responses)
-            target_rewards = torch.tensor([c.total_reward for c in component_rewards], dtype=torch.float32)
+            target_list = [0.0 if getattr(c, 'total_reward', None) is None else float(c.total_reward) for c in component_rewards]
+            target_rewards = torch.tensor(target_list, dtype=torch.float32)
             loss = F.mse_loss(predicted_rewards, target_rewards)
         
         # Backward pass

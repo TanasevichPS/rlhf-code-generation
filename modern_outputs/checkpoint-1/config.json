@@ -2,7 +2,7 @@
   "_num_labels": 2,
   "activation_function": "gelu_new",
   "architectures": [
-    "GPT2Model"
+    "GPT2LMHeadModel"
   ],
   "attn_pdrop": 0.1,
   "bos_token_id": 0,

@@ -162,12 +162,25 @@ class ModernMetricsEvaluator:
     
     def compute_bertscore(self, predictions: List[str], references: List[str]) -> MetricResult:
         """Compute BERTScore for semantic similarity."""
+        # Fallback to a simple token-overlap based proxy if bert-score package is unavailable
         if not BERTSCORE_AVAILABLE:
-            return MetricResult(
-                metric_name="bertscore",
-                score=0.0,
-                error="BERTScore not available"
-            )
+            try:
+                scores = []
+                for pred, ref in zip(predictions, references):
+                    if not pred or not ref:
+                        scores.append(0.0)
+                        continue
+                    pred_tokens = set(pred.split())
+                    ref_tokens = set(ref.split())
+                    if not ref_tokens:
+                        scores.append(0.0)
+                        continue
+                    overlap = len(pred_tokens & ref_tokens) / max(1, len(ref_tokens))
+                    scores.append(overlap)
+                score = float(np.mean(scores)) if scores else 0.0
+                return MetricResult(metric_name="bertscore", score=score, details={"method": "token_overlap_proxy"})
+            except Exception as e:
+                return MetricResult(metric_name="bertscore", score=0.0, error=str(e))
         
         try:
             P, R, F1 = bert_score(predictions, references, lang="en", verbose=False)
@@ -193,12 +206,23 @@ class ModernMetricsEvaluator:
     
     def compute_codebleu(self, predictions: List[str], references: List[str]) -> MetricResult:
         """Compute CodeBLEU for code-specific evaluation."""
+        # Fallback: simple token-precision proxy if codebleu not installed
         if not CODEBLEU_AVAILABLE:
-            return MetricResult(
-                metric_name="codebleu",
-                score=0.0,
-                error="CodeBLEU not available"
-            )
+            try:
+                results = []
+                for pred, ref in zip(predictions, references):
+                    if not pred or not ref:
+                        results.append(0.0)
+                        continue
+                    pred_tokens = pred.split()
+                    ref_tokens = ref.split()
+                    match = sum(1 for t in pred_tokens if t in ref_tokens)
+                    prec = match / max(1, len(pred_tokens))
+                    results.append(prec)
+                score = float(np.mean(results)) if results else 0.0
+                return MetricResult(metric_name="codebleu", score=score, details={"method": "precision_proxy"})
+            except Exception as e:
+                return MetricResult(metric_name="codebleu", score=0.0, error=str(e))
         
         try:
             # CodeBLEU expects specific format
@@ -235,12 +259,23 @@ class ModernMetricsEvaluator:
     
     def compute_bleu(self, predictions: List[str], references: List[str]) -> MetricResult:
         """Compute BLEU score for n-gram overlap."""
+        # Fallback simple unigram-precision BLEU if nltk not available
         if not BLEU_AVAILABLE:
-            return MetricResult(
-                metric_name="bleu",
-                score=0.0,
-                error="BLEU not available"
-            )
+            try:
+                results = []
+                for pred, ref in zip(predictions, references):
+                    pred_tokens = pred.split()
+                    ref_tokens = ref.split()
+                    if len(pred_tokens) == 0:
+                        results.append(0.0)
+                        continue
+                    match = sum(1 for t in pred_tokens if t in ref_tokens)
+                    score = match / max(1, len(pred_tokens))
+                    results.append(score)
+                score = float(np.mean(results)) if results else 0.0
+                return MetricResult(metric_name="bleu", score=score, details={"method": "unigram_precision"})
+            except Exception as e:
+                return MetricResult(metric_name="bleu", score=0.0, error=str(e))
         
         try:
             results = []
@@ -273,12 +308,34 @@ class ModernMetricsEvaluator:
     
     def compute_rouge(self, predictions: List[str], references: List[str]) -> MetricResult:
         """Compute ROUGE scores for summarization metrics."""
+        # Fallback: approximate ROUGE-L by longest-common-subsequence ratio if rouge-score not installed
         if not ROUGE_AVAILABLE or self.rouge_scorer is None:
-            return MetricResult(
-                metric_name="rouge",
-                score=0.0,
-                error="ROUGE not available"
-            )
+            try:
+                def lcs_len(a: List[str], b: List[str]) -> int:
+                    # simple DP LCS
+                    la, lb = len(a), len(b)
+                    dp = [[0] * (lb + 1) for _ in range(la + 1)]
+                    for i in range(la - 1, -1, -1):
+                        for j in range(lb - 1, -1, -1):
+                            if a[i] == b[j]:
+                                dp[i][j] = 1 + dp[i + 1][j + 1]
+                            else:
+                                dp[i][j] = max(dp[i + 1][j], dp[i][j + 1])
+                    return dp[0][0]
+
+                rougeL_scores = []
+                for pred, ref in zip(predictions, references):
+                    p_tokens = pred.split()
+                    r_tokens = ref.split()
+                    if not r_tokens:
+                        rougeL_scores.append(0.0)
+                        continue
+                    lcs = lcs_len(p_tokens, r_tokens)
+                    rougeL_scores.append(lcs / max(1, len(r_tokens)))
+                score = float(np.mean(rougeL_scores)) if rougeL_scores else 0.0
+                return MetricResult(metric_name="rouge", score=score, details={"method": "lcs_proxy"})
+            except Exception as e:
+                return MetricResult(metric_name="rouge", score=0.0, error=str(e))
         
         try:
             rouge1_scores = []

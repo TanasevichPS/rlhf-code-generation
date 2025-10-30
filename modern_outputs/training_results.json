@@ -1,12 +1,12 @@
 {
   "evaluation_metrics": {
-    "bertscore": 0.0,
+    "bertscore": 0.8184431195259094,
     "codebleu": 0.0,
-    "bleu": NaN,
-    "rouge": NaN,
-    "ruby": NaN,
+    "bleu": 0.011885545559345985,
+    "rouge": 0.13758486418174556,
+    "ruby": 0.12400000000000003,
     "targets_met": {
-      "bertscore": false,
+      "bertscore": true,
       "codebleu": false,
       "bleu": false,
       "rouge": false,
@@ -15,12 +15,12 @@
   },
   "final_metrics": {
     "all_targets_met": false,
-    "targets_met_count": 0,
+    "targets_met_count": 1,
     "targets_total": 5,
-    "success_score": 0.0
+    "success_score": 0.2
   },
-  "training_time": 0.4568369388580322,
-  "total_time": 6.194873571395874,
+  "training_time": 265.5694725513458,
+  "total_time": 468.2822992801666,
   "honesty_assessment": {
     "data_source": "local://C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus",
     "data_source_verified": true,
@@ -33,5 +33,5 @@
     },
     "notes": "Data loaded directly from Hugging Face CoNaLa curated splits. If metrics are unusually high or perfectly match references, investigate for leakage or bugs."
   },
-  "timestamp": "2025-10-30T12:43:15.793328"
+  "timestamp": "2025-10-30T16:10:52.305803"
 }

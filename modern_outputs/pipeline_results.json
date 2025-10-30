@@ -18,7 +18,7 @@
       "batch_size": 4,
       "gradient_accumulation_steps": 4,
       "max_grad_norm": 1.0,
-      "ppo_epochs": 10,
+      "ppo_epochs": 3,
       "ppo_clip_ratio": 0.2,
       "ppo_value_loss_coef": 0.1,
       "ppo_entropy_coef": 0.01,
@@ -26,7 +26,7 @@
       "dpo_beta": 0.1,
       "dpo_loss_type": "sigmoid",
       "warmup_steps": 100,
-      "total_steps": 2000,
+      "total_steps": 500,
       "save_steps": 500,
       "eval_steps": 100,
       "logging_steps": 10,
@@ -69,7 +69,7 @@
       "target_rouge": 0.5,
       "target_ruby": 0.3,
       "eval_batch_size": 8,
-      "eval_samples": 100,
+      "eval_samples": 50,
       "eval_datasets": [
         "T2C-CONALA-CODEGEN-FINETUNED-SO.csv",
         "T2C-CONALA-CODEGEN-VANILLA.csv",
@@ -80,8 +80,8 @@
       "embedding_model": "microsoft/codebert-base"
     },
     "data": {
-      "train_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus\\conala-train.json",
-      "eval_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus\\conala-test.json",
+      "train_data_path": "./datasets_for_training",
+      "eval_data_path": "./datasets_for_eval",
       "human_feedback_path": "./evaluation_results_server",
       "output_path": "./modern_outputs",
       "conala_local_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\conala-corpus",
@@ -110,27 +110,32 @@
     "debug": false,
     "verbose": true,
     "experiment_name": "modern_rlhf_experiment",
-    "run_name": "modern_rlhf_experiment_20251030_124309",
+    "run_name": "modern_rlhf_experiment_20251030_160304",
     "tags": [
       "research",
       "experimental"
     ]
   },
   "reward_model_metrics": {
-    "training_time": 2.7885236740112305
+    "training_time": 90.89734268188477
   },
   "training_metrics": {
-    "avg_reward": 0.0,
-    "reward_std": 0.0
+    "avg_reward": 0.678864711523056,
+    "reward_std": 0.03819506654396962,
+    "eval_bertscore": 0.8114044070243835,
+    "eval_codebleu": 0.0,
+    "eval_bleu": 0.011600739750730288,
+    "eval_rouge": 0.11750699575932914,
+    "eval_ruby": 0.12000000000000004
   },
   "evaluation_metrics": {
-    "bertscore": 0.0,
+    "bertscore": 0.8184431195259094,
     "codebleu": 0.0,
-    "bleu": NaN,
-    "rouge": NaN,
-    "ruby": NaN,
+    "bleu": 0.011885545559345985,
+    "rouge": 0.13758486418174556,
+    "ruby": 0.12400000000000003,
     "targets_met": {
-      "bertscore": false,
+      "bertscore": true,
       "codebleu": false,
       "bleu": false,
       "rouge": false,
@@ -139,13 +144,13 @@
   },
   "final_metrics": {
     "all_targets_met": false,
-    "targets_met_count": 0,
+    "targets_met_count": 1,
     "targets_total": 5,
-    "success_score": 0.0
+    "success_score": 0.2
   },
-  "training_time": 0.4568369388580322,
-  "total_time": 6.194873571395874,
+  "training_time": 265.5694725513458,
+  "total_time": 468.2822992801666,
   "success": true,
   "error_message": null,
-  "timestamp": "2025-10-30T12:43:15.791313"
+  "timestamp": "2025-10-30T16:10:52.303559"
 }

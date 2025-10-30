@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import (
-    AutoModel, AutoTokenizer, AutoConfig,
+    AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, AutoConfig,
     PreTrainedModel, PreTrainedTokenizer
 )
 from typing import List, Dict, Any, Optional, Tuple, Union
@@ -99,30 +99,66 @@ class PPOTrainer:
                 logger.warning(f"Failed to initialize wandb: {e}")
     
     def _load_policy_model(self) -> PreTrainedModel:
-        """Load the policy model."""
-        model = AutoModel.from_pretrained(
-            self.config.model.base_model_name,
-            torch_dtype=getattr(torch, self.config.model.torch_dtype),
-            trust_remote_code=self.config.model.trust_remote_code
-        )
-        
-        if self.config.hardware.gradient_checkpointing:
+        """Load the policy model (prefer causal LM / seq2seq variants to get logits/generate)."""
+        model_name = self.config.model.base_model_name
+        torch_dtype = getattr(torch, self.config.model.torch_dtype)
+
+        # Prefer causal LM model to support `.generate()` and `.logits`
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch_dtype,
+                trust_remote_code=self.config.model.trust_remote_code
+            )
+        except Exception:
+            try:
+                model = AutoModelForSeq2SeqLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=self.config.model.trust_remote_code
+                )
+            except Exception:
+                # Fallback to base AutoModel (may not provide logits/generate)
+                model = AutoModel.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=self.config.model.trust_remote_code
+                )
+
+        if self.config.hardware.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
             model.gradient_checkpointing_enable()
-        
+
         return model.to(self.device)
     
     def _load_reference_model(self) -> PreTrainedModel:
-        """Load the reference model (frozen)."""
-        model = AutoModel.from_pretrained(
-            self.config.model.base_model_name,
-            torch_dtype=getattr(torch, self.config.model.torch_dtype),
-            trust_remote_code=self.config.model.trust_remote_code
-        )
-        
+        """Load the reference model (frozen). Prefer matching class to policy model."""
+        model_name = self.config.model.base_model_name
+        torch_dtype = getattr(torch, self.config.model.torch_dtype)
+
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=torch_dtype,
+                trust_remote_code=self.config.model.trust_remote_code
+            )
+        except Exception:
+            try:
+                model = AutoModelForSeq2SeqLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=self.config.model.trust_remote_code
+                )
+            except Exception:
+                model = AutoModel.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=self.config.model.trust_remote_code
+                )
+
         # Freeze reference model
         for param in model.parameters():
             param.requires_grad = False
-        
+
         return model.to(self.device)
     
     def _load_tokenizer(self) -> PreTrainedTokenizer:
@@ -197,8 +233,27 @@ class PPOTrainer:
         
         # Get logits from both models
         with torch.no_grad():
-            policy_logits = self.policy_model(**inputs).logits
-            reference_logits = self.reference_model(**inputs).logits
+            policy_outputs = self.policy_model(**inputs)
+            reference_outputs = self.reference_model(**inputs)
+
+            def _outputs_to_logits(model, outputs):
+                if hasattr(outputs, 'logits') and outputs.logits is not None:
+                    return outputs.logits
+                # Try lm_head
+                if hasattr(model, 'lm_head') and hasattr(outputs, 'last_hidden_state'):
+                    return model.lm_head(outputs.last_hidden_state)
+                # Try output embeddings weight multiplication
+                try:
+                    if hasattr(model, 'get_output_embeddings') and outputs.last_hidden_state is not None:
+                        emb = model.get_output_embeddings()
+                        if hasattr(emb, 'weight'):
+                            return torch.matmul(outputs.last_hidden_state, emb.weight.t())
+                except Exception:
+                    pass
+                raise AttributeError("Model outputs do not contain logits and no lm_head/output_embeddings available")
+
+            policy_logits = _outputs_to_logits(self.policy_model, policy_outputs)
+            reference_logits = _outputs_to_logits(self.reference_model, reference_outputs)
         
         # Compute KL divergence
         policy_probs = F.softmax(policy_logits, dim=-1)
@@ -225,7 +280,17 @@ class PPOTrainer:
         
         # Get logits
         with torch.no_grad():
-            logits = self.policy_model(**inputs).logits
+            outputs = self.policy_model(**inputs)
+            if hasattr(outputs, 'logits') and outputs.logits is not None:
+                logits = outputs.logits
+            elif hasattr(self.policy_model, 'lm_head') and hasattr(outputs, 'last_hidden_state'):
+                logits = self.policy_model.lm_head(outputs.last_hidden_state)
+            else:
+                emb = self.policy_model.get_output_embeddings() if hasattr(self.policy_model, 'get_output_embeddings') else None
+                if emb is not None and hasattr(outputs, 'last_hidden_state'):
+                    logits = torch.matmul(outputs.last_hidden_state, emb.weight.t())
+                else:
+                    raise AttributeError("Unable to obtain logits from policy model outputs")
         
         # Compute entropy
         probs = F.softmax(logits, dim=-1)
@@ -265,7 +330,19 @@ class PPOTrainer:
             ).to(self.device)
             
             outputs = self.policy_model(**inputs)
-            new_log_probs = F.log_softmax(outputs.logits, dim=-1)
+            # Robustly extract logits from outputs
+            if hasattr(outputs, 'logits') and outputs.logits is not None:
+                logits_for_new = outputs.logits
+            elif hasattr(self.policy_model, 'lm_head') and hasattr(outputs, 'last_hidden_state'):
+                logits_for_new = self.policy_model.lm_head(outputs.last_hidden_state)
+            else:
+                emb = self.policy_model.get_output_embeddings() if hasattr(self.policy_model, 'get_output_embeddings') else None
+                if emb is not None and hasattr(outputs, 'last_hidden_state'):
+                    logits_for_new = torch.matmul(outputs.last_hidden_state, emb.weight.t())
+                else:
+                    raise AttributeError("Unable to extract logits for new_log_probs")
+
+            new_log_probs = F.log_softmax(logits_for_new, dim=-1)
             
             # Compute ratio
             ratio = torch.exp(new_log_probs - old_log_probs)
@@ -385,28 +462,32 @@ class PPOTrainer:
         all_rewards = []
         all_references = []
         
+        # If no evaluation dataloader or it's empty, return default zero metrics
+        if not eval_dataloader:
+            return {'avg_reward': 0.0, 'reward_std': 0.0}
+
         with torch.no_grad():
             for batch in eval_dataloader:
-                prompts = batch['prompts']
-                
+                prompts = batch.get('prompts', [])
+
                 # Generate responses
                 generation_output = self.generate_responses(prompts)
                 responses = generation_output['response_texts']
-                
+
                 # Compute rewards
                 rewards = self.compute_rewards(prompts, responses)
-                
+
                 all_prompts.extend(prompts)
                 all_responses.extend(responses)
                 all_rewards.extend(rewards.tolist())
                 if 'references' in batch:
-                    all_references.extend(batch['references'])
+                    all_references.extend(batch.get('references', []))
         
         # Compute evaluation metrics
         eval_metrics = {}
         if all_rewards:
-            eval_metrics['avg_reward'] = np.mean(all_rewards)
-            eval_metrics['reward_std'] = np.std(all_rewards)
+            eval_metrics['avg_reward'] = float(np.mean(all_rewards))
+            eval_metrics['reward_std'] = float(np.std(all_rewards))
         else:
             eval_metrics['avg_reward'] = 0.0
             eval_metrics['reward_std'] = 0.0
@@ -421,10 +502,8 @@ class PPOTrainer:
         eval_metrics['reward_std'] = np.std(all_rewards)
         
         # Compute other metrics if references are available
-        if 'references' in batch:
-            references = batch['references']
-            metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, references)
-
+        if all_references and len(all_references) == len(all_responses):
+            metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
             for metric_name, result in metrics_results.items():
                 eval_metrics[f'eval_{metric_name}'] = result.score
         
@@ -614,7 +693,16 @@ class DPOTrainer:
         # Compute logits
         with torch.no_grad() if use_reference else torch.enable_grad():
             outputs = model(**inputs)
-            logits = outputs.logits
+            if hasattr(outputs, 'logits') and outputs.logits is not None:
+                logits = outputs.logits
+            elif hasattr(model, 'lm_head') and hasattr(outputs, 'last_hidden_state'):
+                logits = model.lm_head(outputs.last_hidden_state)
+            else:
+                emb = model.get_output_embeddings() if hasattr(model, 'get_output_embeddings') else None
+                if emb is not None and hasattr(outputs, 'last_hidden_state'):
+                    logits = torch.matmul(outputs.last_hidden_state, emb.weight.t())
+                else:
+                    raise AttributeError("Unable to obtain logits from model outputs")
         
         # Compute log probabilities
         log_probs = F.log_softmax(logits, dim=-1)
