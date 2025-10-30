@@ -21,19 +21,7 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
 # import seaborn as sns
-=======
-import seaborn as sns
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-import seaborn as sns
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-import seaborn as sns
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 from dataclasses import dataclass
 import warnings
 warnings.filterwarnings("ignore")
@@ -143,19 +131,10 @@ class ModernRLHFPipeline:
         """Train the reward model."""
         # Convert data to training format
         train_batches = self._prepare_reward_training_batches(train_data)
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
         if not train_batches:
             logger.warning("No training batches for reward model; skipping reward training.")
             return
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-        
+            
         # Training loop
         for epoch in range(self.config.reward.reward_epochs):
             epoch_metrics = []
@@ -165,9 +144,6 @@ class ModernRLHFPipeline:
                 epoch_metrics.append(metrics)
             
             # Average metrics
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
             if epoch_metrics:
                 avg_metrics = {}
                 for key in epoch_metrics[0].keys():
@@ -175,23 +151,12 @@ class ModernRLHFPipeline:
                 logger.info(f"Reward Model Epoch {epoch}: {avg_metrics}")
             else:
                 logger.info(f"Reward Model Epoch {epoch}: no steps")
-=======
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+                
             avg_metrics = {}
             for key in epoch_metrics[0].keys():
                 avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
             
             logger.info(f"Reward Model Epoch {epoch}: {avg_metrics}")
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         # Save reward model
         reward_model_path = os.path.join(self.config.data.output_path, "reward_model")
@@ -411,10 +376,7 @@ class ModernRLHFPipeline:
         """Save pipeline results."""
         if self.results is None:
             return
-        
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
+
         def _to_json_safe(obj):
             import numpy as _np
             if isinstance(obj, dict):
@@ -457,27 +419,11 @@ class ModernRLHFPipeline:
         }
         
         with open(results_path, 'w') as f:
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-            json.dump(_to_json_safe(results_dict), f, indent=2)
-=======
             json.dump(results_dict, f, indent=2)
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-            json.dump(results_dict, f, indent=2)
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
-=======
-            json.dump(results_dict, f, indent=2)
->>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         # Save configuration
         config_path = os.path.join(self.config.data.output_path, 'config.json')
         self.config.save(config_path)
-        
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
         # Also write a training_results.json with honesty assessment
         training_results_path = os.path.join(self.config.data.output_path, 'training_results.json')
         honesty_checks = {}
