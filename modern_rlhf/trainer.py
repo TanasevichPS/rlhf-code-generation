@@ -22,12 +22,16 @@ import os
 import time
 from tqdm import tqdm
 <<<<<<< HEAD
+<<<<<<< HEAD
 try:
     import wandb  # Optional
     _WANDB_AVAILABLE = True
 except Exception:  # broad to handle env issues
     wandb = None
     _WANDB_AVAILABLE = False
+=======
+import wandb
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 import wandb
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -89,8 +93,12 @@ class PPOTrainer:
         
         # Initialize wandb if available
 <<<<<<< HEAD
+<<<<<<< HEAD
         self._wandb_enabled = False
         if config.verbose and not config.debug and _WANDB_AVAILABLE:
+=======
+        if config.verbose and not config.debug:
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
         if config.verbose and not config.debug:
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -102,7 +110,10 @@ class PPOTrainer:
                     tags=config.tags
                 )
 <<<<<<< HEAD
+<<<<<<< HEAD
                 self._wandb_enabled = True
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             except Exception as e:
@@ -351,6 +362,7 @@ class PPOTrainer:
             
             # Log to wandb
 <<<<<<< HEAD
+<<<<<<< HEAD
             if self._wandb_enabled:
                 try:
                     wandb.log({
@@ -365,6 +377,8 @@ class PPOTrainer:
                 except Exception as e:
                     logger.warning(f"wandb.log failed: {e}")
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             if hasattr(self, 'wandb') and self.wandb:
                 wandb.log({
                     'step': step.step,
@@ -375,6 +389,9 @@ class PPOTrainer:
                     'learning_rate': step.learning_rate,
                     **step.metrics
                 })
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             
             # Save checkpoint
@@ -397,7 +414,10 @@ class PPOTrainer:
         all_responses = []
         all_rewards = []
 <<<<<<< HEAD
+<<<<<<< HEAD
         all_references = []
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
@@ -416,6 +436,7 @@ class PPOTrainer:
                 all_responses.extend(responses)
                 all_rewards.extend(rewards.tolist())
 <<<<<<< HEAD
+<<<<<<< HEAD
                 if 'references' in batch:
                     all_references.extend(batch['references'])
         
@@ -432,6 +453,8 @@ class PPOTrainer:
         if all_references and len(all_references) == len(all_responses):
             metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         # Compute evaluation metrics
         eval_metrics = {}
@@ -443,6 +466,9 @@ class PPOTrainer:
             references = batch['references']
             metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, references)
             
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             for metric_name, result in metrics_results.items():
                 eval_metrics[f'eval_{metric_name}'] = result.score

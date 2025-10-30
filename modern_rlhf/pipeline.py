@@ -22,7 +22,11 @@ from datetime import datetime
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 <<<<<<< HEAD
+<<<<<<< HEAD
 # import seaborn as sns
+=======
+import seaborn as sns
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 import seaborn as sns
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -136,9 +140,12 @@ class ModernRLHFPipeline:
         # Convert data to training format
         train_batches = self._prepare_reward_training_batches(train_data)
 <<<<<<< HEAD
+<<<<<<< HEAD
         if not train_batches:
             logger.warning("No training batches for reward model; skipping reward training.")
             return
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
@@ -152,6 +159,7 @@ class ModernRLHFPipeline:
             
             # Average metrics
 <<<<<<< HEAD
+<<<<<<< HEAD
             if epoch_metrics:
                 avg_metrics = {}
                 for key in epoch_metrics[0].keys():
@@ -160,11 +168,16 @@ class ModernRLHFPipeline:
             else:
                 logger.info(f"Reward Model Epoch {epoch}: no steps")
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             avg_metrics = {}
             for key in epoch_metrics[0].keys():
                 avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
             
             logger.info(f"Reward Model Epoch {epoch}: {avg_metrics}")
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         
         # Save reward model
@@ -387,6 +400,7 @@ class ModernRLHFPipeline:
             return
         
 <<<<<<< HEAD
+<<<<<<< HEAD
         def _to_json_safe(obj):
             import numpy as _np
             if isinstance(obj, dict):
@@ -408,6 +422,8 @@ class ModernRLHFPipeline:
         
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         # Save results to JSON
         results_path = os.path.join(self.config.data.output_path, 'pipeline_results.json')
         
@@ -426,7 +442,11 @@ class ModernRLHFPipeline:
         
         with open(results_path, 'w') as f:
 <<<<<<< HEAD
+<<<<<<< HEAD
             json.dump(_to_json_safe(results_dict), f, indent=2)
+=======
+            json.dump(results_dict, f, indent=2)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
             json.dump(results_dict, f, indent=2)
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -435,6 +455,7 @@ class ModernRLHFPipeline:
         config_path = os.path.join(self.config.data.output_path, 'config.json')
         self.config.save(config_path)
         
+<<<<<<< HEAD
 <<<<<<< HEAD
         # Also write a training_results.json with honesty assessment
         training_results_path = os.path.join(self.config.data.output_path, 'training_results.json')
@@ -483,6 +504,8 @@ class ModernRLHFPipeline:
         with open(training_results_path, 'w') as f:
             json.dump(_to_json_safe(training_results), f, indent=2)
 
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
         logger.info(f"Results saved to {results_path}")

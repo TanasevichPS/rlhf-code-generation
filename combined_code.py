@@ -2,6 +2,7 @@
 
 # ------------------------------------------------------------
 <<<<<<< HEAD
+<<<<<<< HEAD
 # FILE: .\111.py
 # ------------------------------------------------------------
 
@@ -138,6 +139,8 @@ except Exception as e:
 
 
 # ------------------------------------------------------------
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 # FILE: .\evaluate_multiple_datasets.py
@@ -421,6 +424,7 @@ if __name__ == "__main__":
     main()
 
 # ------------------------------------------------------------
+<<<<<<< HEAD
 <<<<<<< HEAD
 # FILE: .\fix_dependencies.py
 # ------------------------------------------------------------
@@ -11592,6 +11596,8 @@ __all__ = ['DPOTrainer', 'SimpleDPOTrainer', 'DPO_AVAILABLE']
 # ------------------------------------------------------------
 =======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 # FILE: .\scripts\compare_models.py
 # ------------------------------------------------------------
 
@@ -12540,7 +12546,11 @@ try:
         fail_missing_libs()
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+=======
+    from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -12595,7 +12605,11 @@ def main():
     rows = read_sft(data_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 <<<<<<< HEAD
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(args.model_name)
+=======
+    model = AutoModel.from_pretrained(args.model_name)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     model = AutoModel.from_pretrained(args.model_name)
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -13813,7 +13827,11 @@ def main():
     try:
         from transformers import AutoTokenizer
 <<<<<<< HEAD
+<<<<<<< HEAD
         from transformers import AutoModelForCausalLM
+=======
+        from transformers import AutoModel 
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
         from transformers import AutoModel 
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -13827,7 +13845,11 @@ def main():
     # Real runs should configure dataset, sampling/evaluation loops, and metrics.
     tokenizer = AutoTokenizer.from_pretrained(args.sft_model_dir)
 <<<<<<< HEAD
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(args.sft_model_dir)
+=======
+    model = AutoModel.from_pretrained(args.sft_model_dir)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     model = AutoModel.from_pretrained(args.sft_model_dir)
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -13892,7 +13914,11 @@ if __name__ == "__main__":
 import os
 import argparse
 <<<<<<< HEAD
+<<<<<<< HEAD
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+=======
+from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 from transformers import AutoTokenizer, AutoModel, Trainer, TrainingArguments
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -13911,7 +13937,11 @@ def run_sft_one_epoch(model_name: str, output_dir: str):
     data = create_small_dataset()
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side='left', use_fast=True)
 <<<<<<< HEAD
+<<<<<<< HEAD
     model = AutoModelForCausalLM.from_pretrained(model_name)
+=======
+    model = AutoModel.from_pretrained(model_name)
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
     model = AutoModel.from_pretrained(model_name)
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -15594,7 +15624,11 @@ class RUBYMetric:
 import logging
 import ast
 <<<<<<< HEAD
+<<<<<<< HEAD
 from transformers import AutoTokenizer, AutoModelForCausalLM
+=======
+from transformers import AutoTokenizer, AutoModel
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
 from transformers import AutoTokenizer, AutoModel
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
@@ -15653,15 +15687,21 @@ class ModelLoader:
         """Load policy model with value head."""
         try:
 <<<<<<< HEAD
+<<<<<<< HEAD
             # Try to use TRL's AutoModelForCausalLMWithValueHead if available.
             try:
                 from trl import AutoModelForCausalLMWithValueHead
                 model = AutoModelForCausalLMWithValueHead.from_pretrained(
 =======
+=======
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
             # Try to use TRL's AutoModelWithValueHead if available.
             try:
                 from trl import AutoModelWithValueHead
                 model = AutoModelWithValueHead.from_pretrained(
+<<<<<<< HEAD
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
+=======
 >>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
                     self.config.model_name,
                     torch_dtype=torch.float32,
@@ -15672,8 +15712,13 @@ class ModelLoader:
             except Exception:
                 # If TRL is not available or incompatible, fall back to a standard causal LM.
 <<<<<<< HEAD
+<<<<<<< HEAD
                 logger.warning("TRL AutoModelForCausalLMWithValueHead not available or failed to import; falling back to AutoModelForCausalLM")
                 model = AutoModelForCausalLM.from_pretrained(
+=======
+                logger.warning("TRL AutoModelWithValueHead not available or failed to import; falling back to AutoModel")
+                model = AutoModel.from_pretrained(
+>>>>>>> e965bd9110c8eb4f5e1fc4df091eb3a8fa94a0f1
 =======
                 logger.warning("TRL AutoModelWithValueHead not available or failed to import; falling back to AutoModel")
                 model = AutoModel.from_pretrained(
