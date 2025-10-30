@@ -153,6 +153,8 @@ class DataConfig:
     eval_data_path: str = "./datasets_for_eval"
     human_feedback_path: str = "./evaluation_results_server"
     output_path: str = "./modern_outputs"
+    # Optional local CoNaLa corpus root (if provided, prefer local files)
+    conala_local_path: Optional[str] = None
     
     # Data processing
     max_train_samples: int = 10000
@@ -222,6 +224,10 @@ class ModernRLHFConfig:
         if self.hardware.device == "cuda" and not torch.cuda.is_available():
             self.hardware.device = "cpu"
             print("Warning: CUDA not available, falling back to CPU")
+        
+        # Ensure dtype is compatible with device (float32 on CPU)
+        if self.hardware.device == "cpu" and getattr(self.model, "torch_dtype", "float16") != "float32":
+            self.model.torch_dtype = "float32"
         
         # Set run name if not provided
         if self.run_name is None:

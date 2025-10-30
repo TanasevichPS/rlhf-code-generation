@@ -59,8 +59,21 @@ class HumanFeedbackIntegrator:
                 with open(feedback_path, 'r') as f:
                     feedback_data = json.load(f)
                 
+                # Normalize to list of dicts
+                items = []
+                if isinstance(feedback_data, list):
+                    items = feedback_data
+                elif isinstance(feedback_data, dict):
+                    for key in ['data', 'items', 'examples', 'feedback']:
+                        v = feedback_data.get(key)
+                        if isinstance(v, list):
+                            items = v
+                            break
+                
                 # Process feedback data
-                for item in feedback_data:
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
                     prompt = item.get('prompt', '')
                     response = item.get('response', '')
                     rating = item.get('rating', 0.0)
@@ -494,8 +507,9 @@ class RewardModelTrainer:
             epoch_metrics.append(metrics)
         
         # Average metrics
+        if not epoch_metrics:
+            return {'loss': 0.0, 'predicted_reward_mean': 0.0, 'predicted_reward_std': 0.0}
         avg_metrics = {}
         for key in epoch_metrics[0].keys():
             avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
-        
         return avg_metrics

@@ -21,7 +21,12 @@ import json
 import os
 import time
 from tqdm import tqdm
-import wandb
+try:
+    import wandb  # Optional
+    _WANDB_AVAILABLE = True
+except Exception:  # broad to handle env issues
+    wandb = None
+    _WANDB_AVAILABLE = False
 from collections import defaultdict
 
 from .config import ModernRLHFConfig, TrainingConfig
@@ -79,7 +84,8 @@ class PPOTrainer:
         self.training_history = []
         
         # Initialize wandb if available
-        if config.verbose and not config.debug:
+        self._wandb_enabled = False
+        if config.verbose and not config.debug and _WANDB_AVAILABLE:
             try:
                 wandb.init(
                     project=config.experiment_name,
@@ -87,6 +93,7 @@ class PPOTrainer:
                     config=config.to_dict(),
                     tags=config.tags
                 )
+                self._wandb_enabled = True
             except Exception as e:
                 logger.warning(f"Failed to initialize wandb: {e}")
     
@@ -332,16 +339,19 @@ class PPOTrainer:
             epoch_metrics['learning_rate'].append(step.learning_rate)
             
             # Log to wandb
-            if hasattr(self, 'wandb') and self.wandb:
-                wandb.log({
-                    'step': step.step,
-                    'loss': step.loss,
-                    'reward': step.reward,
-                    'kl_divergence': step.kl_divergence,
-                    'entropy': step.entropy,
-                    'learning_rate': step.learning_rate,
-                    **step.metrics
-                })
+            if self._wandb_enabled:
+                try:
+                    wandb.log({
+                        'step': step.step,
+                        'loss': step.loss,
+                        'reward': step.reward,
+                        'kl_divergence': step.kl_divergence,
+                        'entropy': step.entropy,
+                        'learning_rate': step.learning_rate,
+                        **step.metrics
+                    })
+                except Exception as e:
+                    logger.warning(f"wandb.log failed: {e}")
             
             # Save checkpoint
             if step.step % self.config.training.save_steps == 0:
@@ -362,6 +372,7 @@ class PPOTrainer:
         all_prompts = []
         all_responses = []
         all_rewards = []
+        all_references = []
         
         with torch.no_grad():
             for batch in eval_dataloader:
@@ -377,17 +388,21 @@ class PPOTrainer:
                 all_prompts.extend(prompts)
                 all_responses.extend(responses)
                 all_rewards.extend(rewards.tolist())
+                if 'references' in batch:
+                    all_references.extend(batch['references'])
         
         # Compute evaluation metrics
         eval_metrics = {}
-        eval_metrics['avg_reward'] = np.mean(all_rewards)
-        eval_metrics['reward_std'] = np.std(all_rewards)
+        if all_rewards:
+            eval_metrics['avg_reward'] = np.mean(all_rewards)
+            eval_metrics['reward_std'] = np.std(all_rewards)
+        else:
+            eval_metrics['avg_reward'] = 0.0
+            eval_metrics['reward_std'] = 0.0
         
-        # Compute other metrics if references are available
-        if 'references' in batch:
-            references = batch['references']
-            metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, references)
-            
+        # Compute other metrics if references are available and aligned
+        if all_references and len(all_references) == len(all_responses):
+            metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
             for metric_name, result in metrics_results.items():
                 eval_metrics[f'eval_{metric_name}'] = result.score
         

@@ -18,20 +18,11 @@ import logging
 from dataclasses import dataclass
 import random
 from pathlib import Path
-from datasets import load_dataset  # Added import for Hugging Face datasets
-import sys
-from contextlib import contextmanager
-import tempfile
-from typing import cast
-try:
-    from huggingface_hub import hf_hub_download, list_repo_files
-    _HF_HUB_AVAILABLE = True
-except Exception:
-    _HF_HUB_AVAILABLE = False
 
 from .config import ModernRLHFConfig, DataConfig
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class DataSample:
@@ -41,6 +32,7 @@ class DataSample:
     reference: Optional[str] = None
     rating: Optional[float] = None
     metadata: Optional[Dict[str, Any]] = None
+
 
 class ModernDataLoader:
     """Modern data loader for RLHF training."""
@@ -55,275 +47,64 @@ class ModernDataLoader:
         
         logger.info(f"Initialized ModernDataLoader with config: {self.data_config}")
     
-    @contextmanager
-    def _no_local_dataset_scripts(self):
-        """Temporarily remove project paths from sys.path to avoid picking local conala.py."""
-        project_root = Path(__file__).resolve().parents[2]  # repo root
-        removed = []
-        original_sys_path = list(sys.path)
-        for p in list(sys.path):
-            try:
-                pr = Path(p).resolve()
-                if project_root in pr.parents or pr == project_root or p in ("", "."):
-                    sys.path.remove(p)
-                    removed.append(p)
-            except Exception:
-                # Non-pathy entries, ignore
-                if p in ("", "."):
-                    try:
-                        sys.path.remove(p)
-                        removed.append(p)
-                    except Exception:
-                        pass
-        try:
-            yield
-        finally:
-            # Restore original sys.path order
-            sys.path[:] = original_sys_path
-
-    @contextmanager
-    def _temp_cwd(self):
-        """Temporarily change working directory to a safe temp folder."""
-        old_cwd = os.getcwd()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            try:
-                yield
-            finally:
-                os.chdir(old_cwd)
-
-    def _load_conala_split(self, split: str):
-        """Load CoNaLa curated split directly from Hugging Face Hub without dataset scripts.
-
-        Strategy:
-        1) Try discovering curated parquet files via huggingface_hub and load with pandas.
-        2) If that fails, try datasets parquet builder with explicit URLs.
-        3) Finally, try repo id APIs.
-        """
-        # 0) Prefer local corpus if provided
-        local = self._load_conala_local(split)
-        if local is not None:
-            return local
-        # 1) Discover and load curated parquet(s) via Hub API
-        if _HF_HUB_AVAILABLE:
-            try:
-                files = list_repo_files(repo_id="neulab/conala", repo_type="dataset")
-                # Prefer curated parquet paths containing the split name
-                candidate_paths = [
-                    f for f in files
-                    if f.lower().endswith('.parquet') and (
-                        ('/curated/' in f.replace('\\', '/')) or ('curated' in f)
-                    ) and (f"/{split}" in f.replace('\\', '/') or f"{split}-" in f or f"{split}.parquet" in f)
-                ]
-                # If nothing found under curated, fall back to any parquet with split in name
-                if not candidate_paths:
-                    candidate_paths = [
-                        f for f in files
-                        if f.lower().endswith('.parquet') and (f"/{split}" in f.replace('\\', '/') or f"{split}-" in f)
-                    ]
-                if candidate_paths:
-                    dfs = []
-                    for rel_path in candidate_paths:
-                        try:
-                            local_path = hf_hub_download(repo_id="neulab/conala", filename=rel_path, repo_type="dataset")
-                            dfs.append(pd.read_parquet(local_path))
-                        except Exception as e_dl:
-                            logger.warning(f"Failed to download/read parquet {rel_path}: {e_dl}")
-                    if dfs:
-                        df = pd.concat(dfs, ignore_index=True)
-                        return df.to_dict(orient='records')
-            except Exception as e:
-                logger.warning(f"hf_hub listing/parquet load failed: {e}")
-
-        # 2) Datasets parquet builder with explicit URL(s)
-        with self._no_local_dataset_scripts(), self._temp_cwd():
-            try:
-                url = f"https://huggingface.co/datasets/neulab/conala/resolve/main/curated/{split}-00000-of-00001.parquet"
-                ds = load_dataset("parquet", data_files={split: [url]}, split=split)
-                return ds
-            except Exception as e1:
-                logger.warning(f"datasets parquet builder failed: {e1}")
-                try:
-                    # Прямой доступ к подконфигурации на HF
-                    return load_dataset("hf://datasets/neulab/conala/curated", split=split)
-                except Exception as e2:
-                    logger.warning(f"Direct curated load failed: {e2}")
-                    try:
-                        # Резерв: стандартный ID
-                        return load_dataset("neulab/conala", "curated", split=split)
-                    except Exception as e3:
-                        logger.error(f"All loading methods failed for split '{split}': {e3}")
-                        raise
-
-    def _load_conala_local(self, split: str) -> Optional[List[Dict[str, Any]]]:
-        """Load CoNaLa curated split from a local corpus directory if available.
-
-        Supports common file names and formats in the official corpus:
-        - conala-train.json / conala-test.json (JSON array or JSONL)
-        - curated_train.json / curated_test.json
-        - train.json / test.json
-        """
-        root = getattr(self.data_config, 'conala_local_path', None)
-        if not root:
-            return None
-        corpus_dir = Path(root)
-        if not corpus_dir.exists():
-            logger.warning(f"Conala local path not found: {corpus_dir}")
-            return None
-
-        candidates = [
-            f"conala-{split}.json",
-            f"conala_{split}.json",
-            f"curated_{split}.json",
-            f"{split}.json",
-            f"conala-{split}.jsonl",
-            f"conala_{split}.jsonl",
-            f"curated_{split}.jsonl",
-            f"{split}.jsonl",
-            # nested under 'conala-corpus' subdir if user points to parent
-            f"conala-corpus/conala-{split}.json",
-            f"conala-corpus/conala_{split}.json",
+    def load_training_data(self) -> List[DataSample]:
+        """Load training data from various sources."""
+        logger.info("Loading training data...")
+        
+        all_samples = []
+        
+        # Load from different sources
+        sources = [
+            self._load_sft_data,
+            self._load_preference_data,
+            self._load_synthetic_data
         ]
-
-        file_path = None
-        for name in candidates:
-            p = corpus_dir / name
-            if p.exists():
-                file_path = p
-                break
-
-        if file_path is None:
-            # Try to locate any json/jsonl mentioning split in name
-            for p in corpus_dir.rglob("*.json*"):
-                if split in p.name.lower() and ("train" in p.name.lower() or "test" in p.name.lower()):
-                    file_path = p
-                    break
-
-        if file_path is None:
-            logger.warning(f"No local CoNaLa file found for split '{split}' in {corpus_dir}")
-            return None
-
-        logger.info(f"Loading local CoNaLa {split} from: {file_path}")
-
-        records: List[Dict[str, Any]] = []
-        try:
-            if file_path.suffix == '.jsonl' or file_path.suffixes[-1] == '.jsonl':
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        records.append(json.loads(line))
-            else:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    obj = json.load(f)
-                    if isinstance(obj, dict) and split in obj:
-                        records = obj[split]
-                    elif isinstance(obj, list):
-                        records = obj
-                    else:
-                        # Some dumps store under keys like 'data'
-                        for key in ['data', 'examples', 'items']:
-                            if isinstance(obj, dict) and key in obj and isinstance(obj[key], list):
-                                records = obj[key]
-                                break
-            # Normalize to expected fields
-            normalized = []
-            for item in records:
-                prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                response = item.get('snippet') or item.get('code') or item.get('answer') or ""
-                qid = item.get('question_id') or item.get('id')
-                normalized.append({
-                    'prompt': prompt,
-                    'response': response,
-                    'reference': response,
-                    'rating': None,
-                    'metadata': {'source': f'conala_{split}_local', 'question_id': qid}
-                })
-            return normalized
-        except Exception as e:
-            logger.error(f"Failed to load local CoNaLa {split} from {file_path}: {e}")
-            return None
-
-    def load_training_data(self) -> List[Dict[str, Any]]:
-        """Load training data from Hugging Face CoNaLa dataset."""
-        logger.info("Loading training data from Hugging Face: neulab/conala (train split)...")
         
-        # Load curated dataset directly from HF (avoid local conala.py)
-        dataset = self._load_conala_split('train')
-        
-        samples = []
-        for item in dataset:
-            # Robust field access for local/HF variants
-            if isinstance(item, dict):
-                prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                response = item.get('snippet') or item.get('code') or item.get('answer') or ""
-                qid = item.get('question_id') or item.get('id')
-            else:
-                # datasets arrow row
-                try:
-                    prompt = item['rewritten_intent'] if item['rewritten_intent'] else item['intent']
-                except Exception:
-                    prompt = item.get('intent', "")  # type: ignore[attr-defined]
-                response = item.get('snippet', "")  # type: ignore[attr-defined]
-                qid = item.get('question_id', None)  # type: ignore[attr-defined]
-
-            samples.append({
-                'prompt': str(prompt),
-                'response': str(response),  # snippet is the code to generate
-                'reference': str(response),  # Use snippet as reference for supervised fine-tuning
-                'rating': None,
-                'metadata': {'source': 'conala_train', 'question_id': qid}
-            })
+        for source_func in sources:
+            try:
+                samples = source_func()
+                all_samples.extend(samples)
+                logger.info(f"Loaded {len(samples)} samples from {source_func.__name__}")
+            except Exception as e:
+                logger.warning(f"Failed to load from {source_func.__name__}: {e}")
         
         # Filter and clean data
-        filtered_samples = self._filter_samples(samples, allow_empty_response=False)
+        filtered_samples = self._filter_samples(all_samples)
         
         # Limit samples if specified
         if self.data_config.max_train_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_train_samples]
         
-        logger.info(f"Total training samples loaded from CoNaLa: {len(filtered_samples)}")
+        logger.info(f"Total training samples loaded: {len(filtered_samples)}")
         
         return filtered_samples
     
-    def load_evaluation_data(self) -> List[Dict[str, Any]]:
-        """Load evaluation data from Hugging Face CoNaLa dataset."""
-        logger.info("Loading evaluation data from Hugging Face: neulab/conala (test split)...")
+    def load_evaluation_data(self) -> List[DataSample]:
+        """Load evaluation data."""
+        logger.info("Loading evaluation data...")
         
-        # Load curated dataset directly from HF (avoid local conala.py)
-        dataset = self._load_conala_split('test')
+        all_samples = []
         
-        samples = []
-        for item in dataset:
-            if isinstance(item, dict):
-                prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                snippet = item.get('snippet') or item.get('code') or item.get('answer') or ""
-                qid = item.get('question_id') or item.get('id')
-            else:
+        # Load from evaluation datasets
+        eval_path = Path(self.data_config.eval_data_path)
+        
+        if eval_path.exists():
+            for dataset_file in self.data_config.evaluation.eval_datasets:
                 try:
-                    prompt = item['rewritten_intent'] if item['rewritten_intent'] else item['intent']
-                except Exception:
-                    prompt = item.get('intent', "")  # type: ignore[attr-defined]
-                snippet = item.get('snippet', "")  # type: ignore[attr-defined]
-                qid = item.get('question_id', None)  # type: ignore[attr-defined]
-
-            samples.append({
-                'prompt': str(prompt),
-                'response': "",  # model will generate; keep empty to avoid leakage
-                'reference': str(snippet),  # snippet is the gold code
-                'rating': None,
-                'metadata': {'source': 'conala_test', 'question_id': qid}
-            })
+                    samples = self._load_evaluation_dataset(eval_path / dataset_file)
+                    all_samples.extend(samples)
+                    logger.info(f"Loaded {len(samples)} samples from {dataset_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to load {dataset_file}: {e}")
         
-        # Filter and clean data (allow empty responses for eval)
-        filtered_samples = self._filter_samples(samples, allow_empty_response=True)
+        # Filter and clean data
+        filtered_samples = self._filter_samples(all_samples)
         
         # Limit samples if specified
         if self.data_config.max_eval_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_eval_samples]
         
-        logger.info(f"Total evaluation samples loaded from CoNaLa: {len(filtered_samples)}")
+        logger.info(f"Total evaluation samples loaded: {len(filtered_samples)}")
         
         return filtered_samples
     
@@ -468,37 +249,28 @@ class ModernDataLoader:
                 return name
         return None
     
-    def _filter_samples(self, samples: List[Dict[str, Any]], allow_empty_response: bool = False) -> List[Dict[str, Any]]:
-        """Filter and clean samples based on criteria.
-        If allow_empty_response is True, do not enforce min response length and allow empty responses (for eval).
-        """
+    def _filter_samples(self, samples: List[DataSample]) -> List[DataSample]:
+        """Filter and clean samples based on criteria."""
         filtered_samples = []
         
         for sample in samples:
             # Check length constraints
-            if len(sample['prompt']) < self.data_config.min_prompt_length:
+            if len(sample.prompt) < self.data_config.min_prompt_length:
                 continue
-            if len(sample['prompt']) > self.data_config.max_prompt_length:
+            if len(sample.prompt) > self.data_config.max_prompt_length:
                 continue
-            if not allow_empty_response:
-                if len(sample['response']) < self.data_config.min_response_length:
-                    continue
-            if len(sample['response']) > self.data_config.max_response_length:
+            if len(sample.response) < self.data_config.min_response_length:
+                continue
+            if len(sample.response) > self.data_config.max_response_length:
                 continue
             
             # Check for empty or invalid content
-            if not sample['prompt'].strip():
-                continue
-            if not allow_empty_response and not sample['response'].strip():
+            if not sample.prompt.strip() or not sample.response.strip():
                 continue
             
             # Check for code-like content (basic heuristic)
-            if allow_empty_response:
-                # For evaluation, accept as long as prompt/reference exist
+            if self._is_code_like(sample.prompt) or self._is_code_like(sample.response):
                 filtered_samples.append(sample)
-            else:
-                if self._is_code_like(sample['prompt']) or self._is_code_like(sample['response']):
-                    filtered_samples.append(sample)
         
         logger.info(f"Filtered {len(samples)} samples to {len(filtered_samples)} valid samples")
         

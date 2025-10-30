@@ -5,9 +5,9 @@
     "reward_model_name": "microsoft/codebert-base",
     "method": "dpo",
     "learning_rate": 1e-05,
-    "batch_size": 8,
+    "batch_size": 2,
     "max_length": 512,
-    "num_epochs": 20,
+    "num_epochs": 2,
     "warmup_steps": 100,
     "beta": 0.1,
     "reference_free": false,
@@ -23,7 +23,7 @@
     "human_feedback_path": "./evaluation_results_server",
     "output_dir": "./rlhf_outputs",
     "eval_batch_size": 8,
-    "eval_samples": 100,
+    "eval_samples": 20,
     "target_bertscore": 0.7,
     "target_codebleu": 0.6,
     "target_bleu": 0.4,
@@ -31,11 +31,12 @@
     "device": "cuda",
     "mixed_precision": true,
     "gradient_checkpointing": true,
-    "save_steps": 500,
+    "save_steps": 100,
     "eval_steps": 100,
     "logging_steps": 10,
-    "seed": 42
+    "seed": 42,
+    "experiment_name": "simplified_rlhf_experiment"
   },
-  "training_steps": 40,
-  "epochs": 20
+  "training_steps": 10,
+  "epochs": 2
 }
