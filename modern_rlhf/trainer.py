@@ -57,7 +57,6 @@ class PPOTrainer:
         self.reward_model = reward_model
         
         # Force GPU usage - verify CUDA is available
-        import torch
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA GPU is not available! Training requires GPU.")
         
@@ -183,7 +182,6 @@ class PPOTrainer:
 
         model = model.to(self.device)  # Move to GPU
         # Verify model is on GPU
-        import torch
         if next(model.parameters()).is_cuda:
             logger.info(f"Reference model loaded on GPU: {torch.cuda.get_device_name(0)}")
         else:
