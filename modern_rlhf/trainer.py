@@ -55,7 +55,21 @@ class PPOTrainer:
     def __init__(self, config: ModernRLHFConfig, reward_model: ModernRewardModel):
         self.config = config
         self.reward_model = reward_model
-        self.device = torch.device(config.hardware.device)
+        
+        # Force GPU usage - verify CUDA is available
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU is not available! Training requires GPU.")
+        
+        if config.hardware.device != "cuda":
+            logger.warning(f"Config device is '{config.hardware.device}', but forcing GPU usage")
+            config.hardware.device = "cuda"
+        
+        self.device = torch.device("cuda")  # Force GPU
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        logger.info(f"PPOTrainer: Using GPU {gpu_name} ({gpu_memory:.1f} GB)")
+        print(f"PPOTrainer initialized on GPU: {gpu_name} ({gpu_memory:.1f} GB)")
         
         # Load models
         self.policy_model = self._load_policy_model()
@@ -83,6 +97,7 @@ class PPOTrainer:
         self.epoch = 0
         self.best_reward = -float('inf')
         self.training_history = []
+        self.evaluation_history = []  # Track evaluation metrics per epoch
         
         # Initialize wandb if available
         self._wandb_enabled = False
@@ -128,7 +143,14 @@ class PPOTrainer:
         if self.config.hardware.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
             model.gradient_checkpointing_enable()
 
-        return model.to(self.device)
+        model = model.to(self.device)  # Move to GPU
+        # Verify model is on GPU
+        if next(model.parameters()).is_cuda:
+            logger.info(f"Policy model loaded on GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            raise RuntimeError(f"Policy model is not on GPU! Device: {next(model.parameters()).device}")
+        
+        return model
     
     def _load_reference_model(self) -> PreTrainedModel:
         """Load the reference model (frozen). Prefer matching class to policy model."""
@@ -159,7 +181,15 @@ class PPOTrainer:
         for param in model.parameters():
             param.requires_grad = False
 
-        return model.to(self.device)
+        model = model.to(self.device)  # Move to GPU
+        # Verify model is on GPU
+        import torch
+        if next(model.parameters()).is_cuda:
+            logger.info(f"Reference model loaded on GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            raise RuntimeError(f"Reference model is not on GPU! Device: {next(model.parameters()).device}")
+        
+        return model
     
     def _load_tokenizer(self) -> PreTrainedTokenizer:
         """Load the tokenizer."""
@@ -171,6 +201,11 @@ class PPOTrainer:
         
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        # Ensure left padding for decoder-only models to avoid generation issues
+        try:
+            tokenizer.padding_side = 'left'
+        except Exception:
+            pass
         
         return tokenizer
     
@@ -406,7 +441,17 @@ class PPOTrainer:
         """Train for one epoch."""
         epoch_metrics = defaultdict(list)
         
-        for batch in tqdm(dataloader, desc=f"Epoch {self.epoch}"):
+        # Create progress bar with detailed info
+        total_batches = len(dataloader)
+        pbar = tqdm(
+            enumerate(dataloader), 
+            total=total_batches,
+            desc=f"Epoch {self.epoch+1}/{self.config.training.ppo_epochs}",
+            unit="batch",
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+        )
+        
+        for batch_idx, batch in pbar:
             step = self.ppo_step(batch)
             
             # Collect metrics
@@ -415,6 +460,14 @@ class PPOTrainer:
             epoch_metrics['kl_divergence'].append(step.kl_divergence)
             epoch_metrics['entropy'].append(step.entropy)
             epoch_metrics['learning_rate'].append(step.learning_rate)
+            
+            # Update progress bar with current metrics
+            pbar.set_postfix({
+                'loss': f'{step.loss:.4f}',
+                'reward': f'{step.reward:.4f}',
+                'lr': f'{step.learning_rate:.2e}',
+                'step': f'{step.step}/{self.config.training.total_steps}'
+            })
             
             # Log to wandb
             if self._wandb_enabled:
@@ -444,12 +497,27 @@ class PPOTrainer:
             # Save checkpoint
             if step.step % self.config.training.save_steps == 0:
                 self.save_checkpoint()
+                
+            # Stop if reached total steps
+            if step.step >= self.config.training.total_steps:
+                break
+        
+        # Close progress bar
+        pbar.close()
         
         # Average metrics
         avg_metrics = {}
         for key, values in epoch_metrics.items():
             avg_metrics[key] = np.mean(values)
-        
+        # Record history for plotting/inspection
+        try:
+            # Ensure training_history exists and append epoch metrics
+            if not hasattr(self, 'training_history') or self.training_history is None:
+                self.training_history = []
+            self.training_history.append(avg_metrics)
+        except Exception:
+            pass
+
         self.epoch += 1
         return avg_metrics
     
@@ -467,7 +535,14 @@ class PPOTrainer:
             return {'avg_reward': 0.0, 'reward_std': 0.0}
 
         with torch.no_grad():
-            for batch in eval_dataloader:
+            pbar = tqdm(
+                eval_dataloader,
+                desc="Evaluating",
+                unit="batch",
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+            )
+            
+            for batch in pbar:
                 prompts = batch.get('prompts', [])
 
                 # Generate responses
@@ -482,6 +557,14 @@ class PPOTrainer:
                 all_rewards.extend(rewards.tolist())
                 if 'references' in batch:
                     all_references.extend(batch.get('references', []))
+                
+                # Update progress bar
+                pbar.set_postfix({
+                    'processed': len(all_responses),
+                    'avg_reward': f'{np.mean(all_rewards):.4f}' if all_rewards else '0.0000'
+                })
+            
+            pbar.close()
         
         # Compute evaluation metrics
         eval_metrics = {}
@@ -492,7 +575,13 @@ class PPOTrainer:
             eval_metrics['avg_reward'] = 0.0
             eval_metrics['reward_std'] = 0.0
         
-        # Compute other metrics if references are available and aligned
+        # If references exist but lengths mismatch, align to the minimum length and warn
+        if all_references and len(all_references) != len(all_responses):
+            logger.warning(f"Mismatch between number of references ({len(all_references)}) and responses ({len(all_responses)}). Trimming to min length.")
+            n = min(len(all_references), len(all_responses))
+            all_references = all_references[:n]
+            all_responses = all_responses[:n]
+
         if all_references and len(all_references) == len(all_responses):
             metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
 
@@ -766,35 +855,91 @@ class ModernRLHFTrainer:
     
     def train(self, train_dataloader, eval_dataloader=None) -> Dict[str, Any]:
         """Main training loop."""
+        import time
+        start_time = time.time()
+        
         logger.info("Starting training...")
+        print(f"\n{'='*60}")
+        print(f"Training Configuration:")
+        print(f"  Total steps: {self.config.training.total_steps}")
+        print(f"  PPO epochs: {self.config.training.ppo_epochs}")
+        print(f"  Batch size: {self.config.training.batch_size}")
+        print(f"  Gradient accumulation: {self.config.training.gradient_accumulation_steps}")
+        print(f"  Device: {self.config.hardware.device}")
+        print(f"{'='*60}\n")
         
         best_metrics = {}
         patience_counter = 0
         
+        # Main training loop with progress tracking
         for epoch in range(self.config.training.ppo_epochs):
+            epoch_start = time.time()
+            print(f"\n[Epoch {epoch+1}/{self.config.training.ppo_epochs}]")
+            
             # Training
             train_metrics = self.trainer.train_epoch(train_dataloader)
+            epoch_time = time.time() - epoch_start
             
             # Evaluation
             if eval_dataloader is not None:
+                print(f"\n[Evaluation]")
+                eval_start = time.time()
                 eval_metrics = self.trainer.evaluate(eval_dataloader)
+                eval_time = time.time() - eval_start
+                
+                # Store evaluation metrics for plotting
+                epoch_eval_metrics = {
+                    'epoch': epoch + 1,
+                    **eval_metrics
+                }
+                # Store in trainer's evaluation history
+                if hasattr(self.trainer, 'evaluation_history'):
+                    self.trainer.evaluation_history.append(epoch_eval_metrics)
                 
                 # Check for improvement
                 if eval_metrics.get('avg_reward', 0) > best_metrics.get('avg_reward', -float('inf')):
                     best_metrics = eval_metrics
                     patience_counter = 0
                     self.trainer.save_checkpoint()
+                    print(f"  New best reward: {best_metrics.get('avg_reward', 0):.4f} - Checkpoint saved!")
                 else:
                     patience_counter += 1
                 
                 # Early stopping
                 if patience_counter >= self.config.training.early_stopping_patience:
                     logger.info("Early stopping triggered")
+                    print(f"\n[Early Stopping] No improvement for {patience_counter} epochs")
                     break
+                
+                print(f"  Eval time: {eval_time:.1f}s | Reward: {eval_metrics.get('avg_reward', 0):.4f}")
+                # Print evaluation metrics if available
+                if any(k.startswith('eval_') for k in eval_metrics.keys()):
+                    print(f"  Metrics: ", end="")
+                    metric_strs = []
+                    for k in ['eval_bertscore', 'eval_codebleu', 'eval_bleu', 'eval_rouge', 'eval_ruby']:
+                        if k in eval_metrics:
+                            metric_strs.append(f"{k.replace('eval_', '')}={eval_metrics[k]:.4f}")
+                    print(", ".join(metric_strs))
+            
+            # Calculate progress
+            total_time = time.time() - start_time
+            progress = ((epoch + 1) / self.config.training.ppo_epochs) * 100
+            avg_time_per_epoch = total_time / (epoch + 1)
+            remaining_epochs = self.config.training.ppo_epochs - (epoch + 1)
+            eta_seconds = avg_time_per_epoch * remaining_epochs
             
             # Log metrics
-            logger.info(f"Epoch {epoch}: {train_metrics}")
+            print(f"\n[Epoch {epoch+1} Summary]")
+            print(f"  Time: {epoch_time:.1f}s | Total: {total_time/60:.1f}min")
+            print(f"  Progress: {progress:.1f}% | ETA: {eta_seconds/60:.1f}min")
+            print(f"  Train metrics: loss={train_metrics.get('loss', 0):.4f}, reward={train_metrics.get('reward', 0):.4f}")
+            logger.info(f"Epoch {epoch+1}: {train_metrics}")
             if eval_dataloader is not None:
                 logger.info(f"Eval metrics: {eval_metrics}")
+        
+        total_time = time.time() - start_time
+        print(f"\n{'='*60}")
+        print(f"Training completed in {total_time/60:.1f} minutes")
+        print(f"{'='*60}\n")
         
         return best_metrics

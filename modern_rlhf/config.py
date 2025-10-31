@@ -79,7 +79,8 @@ class GenerationConfig:
     top_p: float = 0.9
     top_k: int = 50
     repetition_penalty: float = 1.1
-    do_sample: bool = True
+    # Use deterministic generation by default for evaluation (beam search)
+    do_sample: bool = False
     
     # Code-specific generation
     max_prompt_length: int = 512
@@ -87,7 +88,7 @@ class GenerationConfig:
     min_code_length: int = 10
     
     # Generation strategies
-    num_beams: int = 1
+    num_beams: int = 4
     num_return_sequences: int = 1
     early_stopping: bool = True
 
@@ -155,6 +156,9 @@ class DataConfig:
     output_path: str = "./modern_outputs"
     # Optional local CoNaLa corpus root (if provided, prefer local files)
     conala_local_path: Optional[str] = None
+    # Synthetic human feedback generation options
+    use_model_for_synth_feedback: bool = False
+    synth_feedback_model_name: str = "distilgpt2"
     
     # Data processing
     max_train_samples: int = 10000
@@ -220,10 +224,21 @@ class ModernRLHFConfig:
         # Create output directory
         os.makedirs(self.data.output_path, exist_ok=True)
         
-        # Set device
-        if self.hardware.device == "cuda" and not torch.cuda.is_available():
-            self.hardware.device = "cpu"
-            print("Warning: CUDA not available, falling back to CPU")
+        # Force GPU usage - check CUDA availability
+        if self.hardware.device == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "CUDA GPU is not available! Training requires GPU. "
+                    "Please ensure CUDA is installed and GPU is accessible."
+                )
+            # Verify GPU is actually being used
+            import logging
+            if torch.cuda.is_available():
+                logging.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        elif self.hardware.device == "cpu":
+            import warnings
+            warnings.warn("CPU mode is not recommended for training. Consider using GPU for better performance.")
+        
         # Ensure dtype is compatible with device (float32 on CPU)
         if self.hardware.device == "cpu" and getattr(self.model, "torch_dtype", "float16") != "float32":
             self.model.torch_dtype = "float32"

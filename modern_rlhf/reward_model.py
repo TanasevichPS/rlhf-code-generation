@@ -52,42 +52,56 @@ class HumanFeedbackIntegrator:
         self.human_logits_cache = {}
         self.feedback_weights = {}
         
-    def load_human_feedback(self, feedback_path: str):
-        """Load human feedback data from file."""
+    def load_human_feedback(self, feedback_path_or_items: Union[str, List[Dict[str, Any]]]):
+        """Load human feedback data from a file path or directly from a list of items.
+
+        Accepts either a path to a JSON file or a list of feedback dicts. This makes
+        it robust to being called with the in-memory list produced by the data loader.
+        """
         try:
-            if os.path.exists(feedback_path):
-                with open(feedback_path, 'r') as f:
-                    feedback_data = json.load(f)
-                # Normalize to list of dicts
-                items = []
-                if isinstance(feedback_data, list):
-                    items = feedback_data
-                elif isinstance(feedback_data, dict):
-                    for key in ['data', 'items', 'examples', 'feedback']:
-                        v = feedback_data.get(key)
-                        if isinstance(v, list):
-                            items = v
-                            break
-                
-                # Process feedback data
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    prompt = item.get('prompt', '')
-                    response = item.get('response', '')
-                    rating = item.get('rating', 0.0)
-                    logits = item.get('logits', None)
-                    
-                    # Store human logits if available
-                    if logits and self.config.use_human_logits:
-                        key = f"{prompt[:50]}_{response[:50]}"
-                        self.human_logits_cache[key] = {
-                            'logits': logits,
-                            'rating': rating
-                        }
-                
-                logger.info(f"Loaded {len(self.human_logits_cache)} human feedback entries")
-                
+            # Determine input type
+            items: List[Dict[str, Any]] = []
+            if isinstance(feedback_path_or_items, list):
+                items = feedback_path_or_items
+            else:
+                feedback_path = str(feedback_path_or_items)
+                if os.path.exists(feedback_path):
+                    with open(feedback_path, 'r', encoding='utf-8') as f:
+                        feedback_data = json.load(f)
+                    # Normalize to list of dicts
+                    if isinstance(feedback_data, list):
+                        items = feedback_data
+                    elif isinstance(feedback_data, dict):
+                        for key in ['data', 'items', 'examples', 'feedback']:
+                            v = feedback_data.get(key)
+                            if isinstance(v, list):
+                                items = v
+                                break
+                        if not items:
+                            # Try to interpret dict values as entries
+                            for v in feedback_data.values():
+                                if isinstance(v, dict):
+                                    items.append(v)
+
+            # Process feedback data
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                prompt = item.get('prompt', '')
+                response = item.get('response', '')
+                rating = item.get('rating', 0.0)
+                logits = item.get('logits', None)
+
+                # Store human logits if available
+                if logits and self.config.use_human_logits:
+                    key = f"{prompt[:50]}_{response[:50]}"
+                    self.human_logits_cache[key] = {
+                        'logits': logits,
+                        'rating': rating
+                    }
+
+            logger.info(f"Loaded {len(self.human_logits_cache)} human feedback entries")
+
         except Exception as e:
             logger.warning(f"Failed to load human feedback: {e}")
     
@@ -228,14 +242,29 @@ class ExecutionTester:
 class ModernRewardModel(nn.Module):
     """Modern reward model with multiple signal integration."""
     
-    def __init__(self, config: RewardConfig, model_name: str = "microsoft/codebert-base"):
+    def __init__(self, config: RewardConfig, model_name: str = "microsoft/codebert-base", device: Optional[str] = None):
         super().__init__()
         self.config = config
         self.model_name = model_name
         
+        # Determine device - force GPU if available
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+                logger.info(f"RewardModel: Using GPU {torch.cuda.get_device_name(0)}")
+            else:
+                raise RuntimeError("GPU is required for training but CUDA is not available!")
+        else:
+            self.device = torch.device(device)
+        
         # Load base model
         self.base_model = AutoModel.from_pretrained(model_name)
+        self.base_model = self.base_model.to(self.device)  # Move to GPU immediately
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        try:
+            self.tokenizer.padding_side = 'left'
+        except Exception:
+            pass
         
         # Add padding token if not present
         if self.tokenizer.pad_token is None:
@@ -270,6 +299,15 @@ class ModernRewardModel(nn.Module):
         
         # Initialize weights
         self._init_weights()
+        
+        # Ensure model is on GPU
+        self.to(self.device)
+        
+        # Verify GPU usage
+        if next(self.parameters()).is_cuda:
+            logger.info(f"RewardModel successfully loaded on GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            raise RuntimeError(f"RewardModel is not on GPU! Current device: {next(self.parameters()).device}")
     
     def _init_weights(self):
         """Initialize model weights."""
@@ -305,7 +343,7 @@ class ModernRewardModel(nn.Module):
         """Tokenize prompt-response pairs."""
         # Combine prompts and responses
         texts = [f"{prompt} <SEP> {response}" for prompt, response in zip(prompts, responses)]
-        
+
         # Tokenize
         inputs = self.tokenizer(
             texts,
@@ -314,6 +352,9 @@ class ModernRewardModel(nn.Module):
             max_length=512,
             return_tensors="pt"
         )
+        
+        # Move to GPU
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
         return inputs
     
@@ -401,9 +442,9 @@ class ModernRewardModel(nn.Module):
             final_reward_tensors.append(combined_reward)
 
         if final_reward_tensors:
-            return torch.stack(final_reward_tensors).view(-1)
+            return torch.stack(final_reward_tensors).view(-1).to(self.device)
         else:
-            return torch.tensor([], dtype=torch.float32)
+            return torch.tensor([], dtype=torch.float32, device=self.device)
     
     def load_human_feedback(self, feedback_path: str):
         """Load human feedback data."""
@@ -495,7 +536,7 @@ class RewardModelTrainer:
                 # Normalize and check for None
                 processed = [None if v is None else float(v) for v in human_ratings]
                 if all(v is not None for v in processed) and len(processed) == len(prompts):
-                    target_rewards = torch.tensor(processed, dtype=torch.float32)
+                    target_rewards = torch.tensor(processed, dtype=torch.float32, device=self.model.device)
                     use_human_targets = True
                 else:
                     use_human_targets = False
@@ -508,7 +549,7 @@ class RewardModelTrainer:
             # Use component-based rewards as targets
             component_rewards = self.model.compute_reward_components(prompts, responses)
             target_list = [0.0 if getattr(c, 'total_reward', None) is None else float(c.total_reward) for c in component_rewards]
-            target_rewards = torch.tensor(target_list, dtype=torch.float32)
+            target_rewards = torch.tensor(target_list, dtype=torch.float32, device=self.model.device)
             loss = F.mse_loss(predicted_rewards, target_rewards)
         
         # Backward pass

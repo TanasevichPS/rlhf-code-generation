@@ -23,6 +23,12 @@ import sys
 from contextlib import contextmanager
 import tempfile
 from typing import cast
+import time
+import re
+try:
+    import torch
+except Exception:
+    torch = None
 try:
     from huggingface_hub import hf_hub_download, list_repo_files
     _HF_HUB_AVAILABLE = True
@@ -149,6 +155,27 @@ class ModernDataLoader:
                         return df.to_dict(orient='records')
             except Exception as e:
                 logger.warning(f"hf_hub listing/parquet load failed: {e}")
+
+            # Additional direct download attempts for common curated parquet names
+            try:
+                possible_paths = [
+                    f"curated/{split}.parquet",
+                    f"curated/{split}-00000-of-00001.parquet",
+                    f"{split}.parquet",
+                    f"{split}-00000-of-00001.parquet",
+                ]
+                dfs = []
+                for rel_path in possible_paths:
+                    try:
+                        local_path = hf_hub_download(repo_id="neulab/conala", filename=rel_path, repo_type="dataset")
+                        dfs.append(pd.read_parquet(local_path))
+                    except Exception:
+                        continue
+                if dfs:
+                    df = pd.concat(dfs, ignore_index=True)
+                    return df.to_dict(orient='records')
+            except Exception as e_extra:
+                logger.warning(f"hf_hub direct curated parquet attempts failed: {e_extra}")
 
         # 2) Datasets parquet builder with explicit URL(s)
         with self._no_local_dataset_scripts(), self._temp_cwd():
@@ -338,35 +365,113 @@ class ModernDataLoader:
 
         all_samples: List[DataSample] = []
 
-        # First preference: CoNaLa curated split (local or HF)
+        # First preference: local CoNaLa corpus (if provided) -> try any matching JSON/JSONL files
+        loaded = False
         try:
-            conala = self._load_conala_split('test')
-            if conala is not None:
-                logger.info("Loading evaluation data from CoNaLa curated split")
-                # `conala` may be a datasets.Dataset or list of dicts
-                for item in conala:
-                    if isinstance(item, dict):
-                        prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                        snippet = item.get('snippet') or item.get('code') or item.get('answer') or ""
-                        qid = item.get('question_id') or item.get('id')
+            local_root = getattr(self.data_config, 'conala_local_path', None)
+            if local_root:
+                corpus_dir = Path(local_root)
+                if corpus_dir.exists():
+                    # Prefer an explicit conala-test.json if present
+                    explicit_test = corpus_dir / 'conala-test.json'
+                    explicit_testl = corpus_dir / 'conala-test.jsonl'
+                    if explicit_test.exists():
+                        matched_files = [explicit_test]
+                    elif explicit_testl.exists():
+                        matched_files = [explicit_testl]
                     else:
-                        try:
-                            prompt = item['rewritten_intent'] if item.get('rewritten_intent') else item.get('intent', "")
-                        except Exception:
-                            prompt = getattr(item, 'intent', "")
-                        snippet = item.get('snippet', "") if hasattr(item, 'get') else getattr(item, 'snippet', "")
-                        qid = item.get('question_id', None) if hasattr(item, 'get') else getattr(item, 'question_id', None)
+                        # find files likely matching the test split
+                        json_files = sorted(list(corpus_dir.glob('*.json*')))
+                        matched_files = [p for p in json_files if 'test' in p.name.lower()]
+                        # fallback: if no explicit test files, accept any json/jsonl
+                        if not matched_files:
+                            matched_files = json_files
 
-                    all_samples.append(DataSample(
-                        prompt=str(prompt),
-                        response="",
-                        reference=str(snippet) if snippet is not None else None,
-                        rating=None,
-                        metadata={'source': 'conala_test', 'question_id': qid}
-                    ))
+                    for file_path in matched_files:
+                        try:
+                            logger.info(f"Loading local CoNaLa evaluation from: {file_path}")
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                if file_path.suffix == '.jsonl' or file_path.name.lower().endswith('.jsonl'):
+                                    records = [json.loads(line) for line in f if line.strip()]
+                                else:
+                                    obj = json.load(f)
+                                    if isinstance(obj, list):
+                                        records = obj
+                                    elif isinstance(obj, dict):
+                                        # try common keys
+                                        for key in ['test', 'data', 'examples', 'items']:
+                                            if key in obj and isinstance(obj[key], list):
+                                                records = obj[key]
+                                                break
+                                        else:
+                                            # flatten values if dict of dicts
+                                            records = [v for v in obj.values() if isinstance(v, dict)]
+
+                            # normalize records to DataSample and append
+                            for item in records:
+                                if isinstance(item, dict):
+                                    prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or item.get('text') or ""
+                                    snippet = item.get('snippet') or item.get('code') or item.get('answer') or item.get('response') or ""
+                                    qid = item.get('question_id') or item.get('id')
+                                else:
+                                    # fallback generic
+                                    prompt = str(item)
+                                    snippet = ""
+                                    qid = None
+
+                                all_samples.append(DataSample(
+                                    prompt=str(prompt),
+                                    response="",
+                                    reference=str(snippet) if snippet is not None else None,
+                                    rating=None,
+                                    metadata={'source': 'conala_test_local', 'question_id': qid, 'file': str(file_path)}
+                                ))
+                            loaded = True
+                        except Exception as e_file:
+                            logger.warning(f"Failed to read local CoNaLa file {file_path}: {e_file}")
 
         except Exception as e:
-            logger.warning(f"CoNaLa curated load failed or not available: {e}")
+            logger.warning(f"Local CoNaLa load check failed: {e}")
+
+        # If local corpus not loaded, try HF curated split (robust) as before
+        if not loaded:
+            try:
+                conala = self._load_conala_split('test')
+                if conala is not None:
+                    ds = conala
+                else:
+                    # Try direct datasets load as a fallback (force HF)
+                    try:
+                        from datasets import load_dataset
+                        with self._no_local_dataset_scripts(), self._temp_cwd():
+                            ds = load_dataset('neulab/conala', 'curated', split='test')
+                    except Exception:
+                        ds = None
+
+                if ds is not None:
+                    logger.info("Loading evaluation data from CoNaLa curated split (HF)")
+                    # datasets.Dataset supports iteration and dict-like access
+                    for item in ds:
+                        if isinstance(item, dict):
+                            prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
+                            snippet = item.get('snippet') or item.get('code') or item.get('answer') or ""
+                            qid = item.get('question_id') or item.get('id')
+                        else:
+                            # fallback
+                            prompt = getattr(item, 'intent', "")
+                            snippet = getattr(item, 'snippet', "")
+                            qid = getattr(item, 'question_id', None)
+
+                        all_samples.append(DataSample(
+                            prompt=str(prompt),
+                            response="",
+                            reference=str(snippet) if snippet is not None else None,
+                            rating=None,
+                            metadata={'source': 'conala_test', 'question_id': qid}
+                        ))
+                    loaded = True
+            except Exception as e:
+                logger.warning(f"CoNaLa curated load failed or not available: {e}")
 
         # Fallback: load evaluation CSVs from eval_data_path
         if not all_samples:
@@ -522,16 +627,46 @@ class ModernDataLoader:
         out_path.mkdir(parents=True, exist_ok=True)
 
         items: List[Dict[str, Any]] = []
+
+        use_model = getattr(self.data_config, 'use_model_for_synth_feedback', False)
+        model_name = getattr(self.data_config, 'synth_feedback_model_name', 'distilgpt2')
+        generator = None
+        if use_model:
+            try:
+                from transformers import pipeline, set_seed
+                device = 0 if (torch is not None and getattr(torch, 'cuda', None) and torch.cuda.is_available()) else -1
+                generator = pipeline('text-generation', model=model_name, device=device)
+                set_seed(42)
+                logger.info(f"Using model {model_name} to generate synthetic human feedback (device={device})")
+            except Exception as e:
+                logger.warning(f"Failed to initialize generation model {model_name}: {e}")
+                generator = None
+
         for i in range(n):
-            rating = random.randint(1, 5)
             prompt = f"Example prompt asking for solution {i}"
             response = f"Example response content {i}"
+
+            rating = None
+            if generator is not None:
+                try:
+                    instruction = f"Rate the following response on a scale from 1 to 5 for correctness and usefulness, return only the integer rating. Response: '''{response}'''\nRating:"
+                    out = generator(instruction, max_new_tokens=8, do_sample=False)
+                    text = out[0].get('generated_text', '')
+                    m = re.search(r'([1-5])', text)
+                    if m:
+                        rating = int(m.group(1))
+                except Exception as e:
+                    logger.warning(f"Model generation failed for synth feedback sample {i}: {e}")
+
+            if rating is None:
+                rating = random.randint(1, 5)
+
             items.append({
                 'id': f'synth_{i}',
                 'prompt': prompt,
                 'response': response,
                 'rating': rating,
-                'comment': f'Synthetic rating {rating}'
+                'comment': f"Synthetic rating {rating}"
             })
 
         # Save to a timestamped file so load_human_feedback can find it

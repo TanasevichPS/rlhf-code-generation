@@ -54,7 +54,19 @@ class ModernRLHFPipeline:
     
     def __init__(self, config: Optional[ModernRLHFConfig] = None):
         self.config = config or get_research_config()
-        self.device = torch.device(self.config.hardware.device)
+        
+        # Force GPU usage - verify CUDA is available
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU is not available! Pipeline requires GPU for training.")
+        
+        if self.config.hardware.device != "cuda":
+            logger.warning(f"Config device is '{self.config.hardware.device}', but forcing GPU usage")
+            self.config.hardware.device = "cuda"
+        
+        self.device = torch.device("cuda")  # Force GPU
+        logger.info(f"Pipeline initialized on GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Pipeline using GPU: {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB)")
         
         # Initialize components
         self.data_loader = ModernDataLoader(self.config)
@@ -67,6 +79,10 @@ class ModernRLHFPipeline:
         
         # Results
         self.results = None
+        # Training histories for plotting
+        self.reward_history = []
+        self.rlhf_history = []
+        self.evaluation_history = []  # Track evaluation metrics per epoch
         
         # Setup logging
         self._setup_logging()
@@ -131,10 +147,20 @@ class ModernRLHFPipeline:
         """Prepare and train the reward model."""
         logger.info("Preparing reward model...")
         
-        # Initialize reward model
+        # Verify GPU is available before initializing reward model
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA GPU is not available! Reward model requires GPU.")
+        
+        if self.config.hardware.device != "cuda":
+            logger.warning(f"Config device is '{self.config.hardware.device}', but forcing GPU usage")
+            self.config.hardware.device = "cuda"
+        
+        # Initialize reward model with explicit GPU device
         self.reward_model = ModernRewardModel(
             self.config.reward,
-            self.config.model.reward_model_name
+            self.config.model.reward_model_name,
+            device="cuda"  # Force GPU
         )
         
         # Load human feedback if available
@@ -158,29 +184,40 @@ class ModernRLHFPipeline:
         if not train_batches:
             logger.warning("No training batches for reward model; skipping reward training.")
             return
-            
-        # Training loop
+
+        # Training loop using RewardModelTrainer.train_epoch to collect epoch metrics
+        total_batches = len(train_batches)
         for epoch in range(self.config.reward.reward_epochs):
-            epoch_metrics = []
-            
-            for batch in tqdm(train_batches, desc=f"Reward Training Epoch {epoch}"):
-                metrics = self.reward_trainer.train_step(batch)
-                epoch_metrics.append(metrics)
-            
-            # Average metrics
-            if epoch_metrics:
-                avg_metrics = {}
-                for key in epoch_metrics[0].keys():
-                    avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
-                logger.info(f"Reward Model Epoch {epoch}: {avg_metrics}")
-            else:
-                logger.info(f"Reward Model Epoch {epoch}: no steps")
-                
-            avg_metrics = {}
-            for key in epoch_metrics[0].keys():
-                avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
-            
-            logger.info(f"Reward Model Epoch {epoch}: {avg_metrics}")
+            try:
+                avg_metrics = self.reward_trainer.train_epoch(train_batches)
+            except Exception:
+                # Fallback to per-step training if train_epoch unsupported
+                epoch_metrics = []
+                pbar = tqdm(
+                    train_batches, 
+                    desc=f"Reward Training Epoch {epoch+1}/{self.config.reward.reward_epochs}",
+                    unit="batch",
+                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                )
+                for batch in pbar:
+                    metrics = self.reward_trainer.train_step(batch)
+                    epoch_metrics.append(metrics)
+                    # Update progress bar
+                    if epoch_metrics:
+                        latest = epoch_metrics[-1]
+                        pbar.set_postfix({
+                            'loss': f'{latest.get("loss", 0):.4f}',
+                            'reward': f'{latest.get("predicted_reward_mean", 0):.4f}'
+                        })
+                pbar.close()
+                if epoch_metrics:
+                    avg_metrics = {k: np.mean([m[k] for m in epoch_metrics]) for k in epoch_metrics[0].keys()}
+                else:
+                    avg_metrics = {}
+
+            logger.info(f"Reward Model Epoch {epoch+1}/{self.config.reward.reward_epochs}: {avg_metrics}")
+            # Save history
+            self.reward_history.append(avg_metrics)
         
         # Save reward model
         reward_model_path = os.path.join(self.config.data.output_path, "reward_model")
@@ -243,8 +280,20 @@ class ModernRLHFPipeline:
         train_dataloader = self._prepare_rlhf_dataloader(train_data, is_training=True)
         eval_dataloader = self._prepare_rlhf_dataloader(eval_data, is_training=False)
         
-        # Train
+        # Train with evaluation tracking
         training_metrics = self.rlhf_trainer.train(train_dataloader, eval_dataloader)
+        
+        # Copy evaluation history from trainer to pipeline
+        if hasattr(self.rlhf_trainer, 'trainer') and hasattr(self.rlhf_trainer.trainer, 'evaluation_history'):
+            self.evaluation_history = self.rlhf_trainer.trainer.evaluation_history
+        
+        # Capture RLHF trainer history if available
+        try:
+            trainer_obj = getattr(self.rlhf_trainer, 'trainer', None)
+            if trainer_obj is not None and hasattr(trainer_obj, 'training_history'):
+                self.rlhf_history = trainer_obj.training_history
+        except Exception:
+            self.rlhf_history = []
         
         logger.info(f"RLHF training completed. Final metrics: {training_metrics}")
         
@@ -289,8 +338,17 @@ class ModernRLHFPipeline:
         # Generate responses in batches
         all_responses = []
         batch_size = self.config.evaluation.eval_batch_size
+        total_batches = (len(all_prompts) + batch_size - 1) // batch_size
         
-        for i in tqdm(range(0, len(all_prompts), batch_size), desc="Generating responses"):
+        pbar = tqdm(
+            range(0, len(all_prompts), batch_size),
+            total=total_batches,
+            desc="Generating responses",
+            unit="batch",
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+        )
+        
+        for i in pbar:
             batch_prompts = all_prompts[i:i + batch_size]
             
             # Generate responses
@@ -298,6 +356,14 @@ class ModernRLHFPipeline:
             batch_responses = generation_output['response_texts']
             
             all_responses.extend(batch_responses)
+            
+            # Update progress
+            pbar.set_postfix({
+                'generated': len(all_responses),
+                'total': len(all_prompts)
+            })
+        
+        pbar.close()
         
         # Compute metrics
         metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
@@ -328,28 +394,47 @@ class ModernRLHFPipeline:
         start_time = time.time()
         
         try:
+            print("\n" + "="*70)
+            print("MODERN RLHF PIPELINE - Training Progress")
+            print("="*70)
             logger.info("Starting full RLHF pipeline...")
             
             # Step 1: Load data
+            print("\n[Step 1/5] Loading data...")
+            step_start = time.time()
             train_data, eval_data, human_feedback = self.load_data()
+            step_time = time.time() - step_start
+            print(f"  Loaded {len(train_data)} training samples, {len(eval_data)} eval samples")
+            print(f"  Human feedback entries: {len(human_feedback) if human_feedback else 0}")
+            print(f"  Completed in {step_time:.1f}s")
             
             # Step 2: Prepare reward model
+            print("\n[Step 2/5] Preparing reward model...")
             reward_model_start = time.time()
             self.prepare_reward_model(train_data, human_feedback)
             reward_model_time = time.time() - reward_model_start
+            print(f"  Reward model prepared in {reward_model_time:.1f}s")
             
             # Step 3: Prepare RLHF trainer
+            print("\n[Step 3/5] Preparing RLHF trainer...")
+            step_start = time.time()
             self.prepare_rlhf_trainer()
+            step_time = time.time() - step_start
+            print(f"  RLHF trainer prepared in {step_time:.1f}s")
             
             # Step 4: Train RLHF model
+            print("\n[Step 4/5] Training RLHF model...")
             training_start = time.time()
             training_metrics = self.train_rlhf(train_data, eval_data)
             training_time = time.time() - training_start
+            print(f"  Training completed in {training_time/60:.1f} minutes")
             
             # Step 5: Evaluate model
+            print("\n[Step 5/5] Evaluating model...")
             evaluation_start = time.time()
             evaluation_metrics = self.evaluate_model(eval_data)
             evaluation_time = time.time() - evaluation_start
+            print(f"  Evaluation completed in {evaluation_time:.1f}s")
             
             # Step 6: Compute final metrics
             final_metrics = self._compute_final_metrics(evaluation_metrics)
@@ -529,6 +614,9 @@ class ModernRLHFPipeline:
         # Plot 3: Target achievement
         self._plot_target_achievement(plots_dir)
         
+        # Plot 4: Evaluation metrics by epoch
+        self._plot_evaluation_metrics_by_epoch(plots_dir)
+        
         logger.info(f"Visualizations saved to {plots_dir}")
     
     def _plot_evaluation_metrics(self, plots_dir: str):
@@ -570,17 +658,169 @@ class ModernRLHFPipeline:
         plt.close()
     
     def _plot_training_progress(self, plots_dir: str):
-        """Plot training progress."""
-        # This would require training history data
-        # For now, create a simple placeholder
-        plt.figure(figsize=(10, 6))
-        plt.title('Training Progress (Placeholder)')
-        plt.xlabel('Step')
-        plt.ylabel('Loss')
-        plt.text(0.5, 0.5, 'Training progress visualization\nwould be implemented here', 
-                ha='center', va='center', transform=plt.gca().transAxes)
-        plt.savefig(os.path.join(plots_dir, 'training_progress.png'), dpi=300, bbox_inches='tight')
+        """Plot training progress for reward and RLHF training."""
+        # Reward model history
+        if getattr(self, 'reward_history', None):
+            # Collect common keys
+            keys = set()
+            for e in self.reward_history:
+                keys.update(e.keys())
+            plt.figure(figsize=(10, 6))
+            for key in sorted(keys):
+                vals = [e.get(key, np.nan) for e in self.reward_history]
+                plt.plot(range(len(vals)), vals, label=key)
+            plt.title('Reward Model Training Metrics')
+            plt.xlabel('Epoch')
+            plt.ylabel('Value')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, 'reward_training_metrics.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+
+        # RLHF trainer history
+        if getattr(self, 'rlhf_history', None):
+            # rlhf_history is a list of dicts
+            keys = set()
+            for e in self.rlhf_history:
+                keys.update(e.keys())
+            plt.figure(figsize=(10, 6))
+            for key in sorted(keys):
+                vals = [e.get(key, np.nan) for e in self.rlhf_history]
+                plt.plot(range(len(vals)), vals, label=key)
+            plt.title('RLHF Training Metrics (per-epoch averages)')
+            plt.xlabel('Epoch')
+            plt.ylabel('Value')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, 'rlhf_training_metrics.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+    
+    def _plot_evaluation_metrics_by_epoch(self, plots_dir: str):
+        """Plot evaluation metrics (bertscore, codebleu, bleu, rouge, ruby) by epoch."""
+        if not hasattr(self, 'evaluation_history') or not self.evaluation_history:
+            logger.warning("No evaluation history available for plotting")
+            return
+        
+        # Extract metrics by epoch
+        epochs = []
+        metrics_data = {
+            'bertscore': [],
+            'codebleu': [],
+            'bleu': [],
+            'rouge': [],
+            'ruby': []
+        }
+        
+        for eval_record in self.evaluation_history:
+            epoch = eval_record.get('epoch', len(epochs) + 1)
+            epochs.append(epoch)
+            
+            # Extract metrics (they might be prefixed with 'eval_')
+            for metric_name in metrics_data.keys():
+                # Try both 'metric_name' and 'eval_metric_name'
+                value = eval_record.get(metric_name) or eval_record.get(f'eval_{metric_name}')
+                if value is None:
+                    value = np.nan
+                metrics_data[metric_name].append(value)
+        
+        if not epochs:
+            logger.warning("No epochs found in evaluation history")
+            return
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig.suptitle('Evaluation Metrics by Epoch', fontsize=16, fontweight='bold')
+        
+        # Colors for each metric
+        colors = {
+            'bertscore': '#1f77b4',
+            'codebleu': '#ff7f0e',
+            'bleu': '#2ca02c',
+            'rouge': '#d62728',
+            'ruby': '#9467bd'
+        }
+        
+        # Target values
+        targets = {
+            'bertscore': self.config.evaluation.target_bertscore,
+            'codebleu': self.config.evaluation.target_codebleu,
+            'bleu': self.config.evaluation.target_bleu,
+            'rouge': self.config.evaluation.target_rouge,
+            'ruby': self.config.evaluation.target_ruby
+        }
+        
+        # Plot each metric
+        metric_names = list(metrics_data.keys())
+        axes_flat = axes.flatten()
+        
+        for idx, metric_name in enumerate(metric_names):
+            ax = axes_flat[idx]
+            values = metrics_data[metric_name]
+            target = targets.get(metric_name, 0)
+            
+            # Plot metric values
+            ax.plot(epochs, values, marker='o', linestyle='-', linewidth=2, 
+                   markersize=8, color=colors[metric_name], label=f'{metric_name}')
+            
+            # Plot target line
+            ax.axhline(y=target, color='red', linestyle='--', linewidth=2, 
+                      alpha=0.7, label=f'Target: {target:.3f}')
+            
+            # Fill area below/above target
+            if len(values) > 0:
+                values_array = np.array(values)
+                mask = ~np.isnan(values_array)
+                if mask.any():
+                    ax.fill_between(epochs, target, values_array, 
+                                   where=(values_array >= target) if mask.any() else False,
+                                   alpha=0.2, color='green', label='Above target')
+                    ax.fill_between(epochs, target, values_array,
+                                   where=(values_array < target) if mask.any() else False,
+                                   alpha=0.2, color='red', label='Below target')
+            
+            ax.set_xlabel('Epoch', fontsize=12)
+            ax.set_ylabel(f'{metric_name.upper()} Score', fontsize=12)
+            ax.set_title(f'{metric_name.upper()} Over Training', fontsize=13, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=10)
+            ax.set_xticks(epochs)
+            
+            # Add value annotations
+            for i, (e, v) in enumerate(zip(epochs, values)):
+                if not np.isnan(v):
+                    ax.annotate(f'{v:.3f}', (e, v), textcoords="offset points", 
+                               xytext=(0,10), ha='center', fontsize=9)
+        
+        # Remove extra subplot
+        axes_flat[-1].axis('off')
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'evaluation_metrics_by_epoch.png'), dpi=300, bbox_inches='tight')
         plt.close()
+        
+        # Also create a combined plot with all metrics on one axis
+        plt.figure(figsize=(12, 7))
+        for metric_name, color in colors.items():
+            values = metrics_data[metric_name]
+            if any(not np.isnan(v) for v in values):
+                plt.plot(epochs, values, marker='o', linestyle='-', linewidth=2.5,
+                        markersize=8, color=color, label=f'{metric_name.upper()}', alpha=0.8)
+        
+        # Add target lines
+        for metric_name, target in targets.items():
+            plt.axhline(y=target, color=colors[metric_name], linestyle='--', 
+                      linewidth=1.5, alpha=0.5, label=f'{metric_name.upper()} target')
+        
+        plt.xlabel('Epoch', fontsize=14)
+        plt.ylabel('Score', fontsize=14)
+        plt.title('All Evaluation Metrics by Epoch', fontsize=16, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='best', fontsize=11, ncol=2)
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'all_evaluation_metrics_by_epoch.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info("Created evaluation metrics by epoch plots")
     
     def _plot_target_achievement(self, plots_dir: str):
         """Plot target achievement."""
