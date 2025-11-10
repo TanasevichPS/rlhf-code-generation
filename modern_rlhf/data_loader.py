@@ -287,46 +287,69 @@ class ModernDataLoader:
             logger.error(f"Failed to load local CoNaLa {split} from {file_path}: {e}")
             return None
 
-    def load_training_data(self) -> List[Dict[str, Any]]:
-        """Load training data from Hugging Face CoNaLa dataset."""
-        logger.info("Loading training data from Hugging Face: neulab/conala (train split)...")
-        
-        # Load curated dataset directly from HF (avoid local conala.py)
+    def _load_conala_train_samples(self) -> List[DataSample]:
+        """Load CoNaLa curated train split and return as DataSample entries."""
+        logger.info("Loading CoNaLa train split (local or Hugging Face)...")
+
         dataset = self._load_conala_split('train')
-        
-        samples = []
+
+        samples: List[DataSample] = []
         for item in dataset:
-            # Robust field access for local/HF variants
             if isinstance(item, dict):
-                prompt = item.get('rewritten_intent') or item.get('intent') or item.get('question') or ""
-                response = item.get('snippet') or item.get('code') or item.get('answer') or ""
+                prompt = (
+                    item.get('prompt')
+                    or item.get('rewritten_intent')
+                    or item.get('intent')
+                    or item.get('question')
+                    or ""
+                )
+                response = (
+                    item.get('response')
+                    or item.get('snippet')
+                    or item.get('code')
+                    or item.get('answer')
+                    or ""
+                )
                 qid = item.get('question_id') or item.get('id')
             else:
-                # datasets arrow row
                 try:
-                    prompt = item['rewritten_intent'] if item['rewritten_intent'] else item['intent']
+                    prompt = item['prompt'] if item['prompt'] else item['rewritten_intent']
                 except Exception:
-                    prompt = item.get('intent', "")  # type: ignore[attr-defined]
-                response = item.get('snippet', "")  # type: ignore[attr-defined]
+                    try:
+                        prompt = item['rewritten_intent'] if item['rewritten_intent'] else item['intent']
+                    except Exception:
+                        prompt = item.get('intent', "")  # type: ignore[attr-defined]
+                try:
+                    response = item['response'] if item['response'] else item['snippet']
+                except Exception:
+                    response = item.get('snippet', "")  # type: ignore[attr-defined]
                 qid = item.get('question_id', None)  # type: ignore[attr-defined]
 
-            samples.append({
-                'prompt': str(prompt),
-                'response': str(response),  # snippet is the code to generate
-                'reference': str(response),  # Use snippet as reference for supervised fine-tuning
-                'rating': None,
-                'metadata': {'source': 'conala_train', 'question_id': qid}
-            })
-        
-        # Filter and clean data
-        filtered_samples = self._filter_samples(samples, allow_empty_response=False)
+            samples.append(DataSample(
+                prompt=str(prompt),
+                response=str(response),
+                reference=str(response) if response else None,
+                rating=None,
+                metadata={'source': 'conala_train', 'question_id': qid}
+            ))
+
+        logger.info(f"Loaded {len(samples)} raw CoNaLa training samples")
+        return samples
 
     def load_training_data(self) -> List[DataSample]:
         """Load training data from various sources."""
         logger.info("Loading training data...")
-        
-        all_samples = []
-        
+
+        all_samples: List[DataSample] = []
+
+        # Prefer CoNaLa curated dataset
+        try:
+            conala_samples = self._load_conala_train_samples()
+            all_samples.extend(conala_samples)
+            logger.info(f"Added {len(conala_samples)} CoNaLa samples")
+        except Exception as e:
+            logger.warning(f"Failed to load CoNaLa training data: {e}")
+
         # Load from different sources
         sources = [
             self._load_sft_data,
@@ -344,11 +367,15 @@ class ModernDataLoader:
         
         # Filter and clean data
         filtered_samples = self._filter_samples(all_samples)
+
+        if self.data_config.use_data_augmentation and filtered_samples:
+            filtered_samples = self.augment_data(filtered_samples)
+
         # Limit samples if specified
         if self.data_config.max_train_samples > 0:
             filtered_samples = filtered_samples[:self.data_config.max_train_samples]
         
-        logger.info(f"Total training samples loaded from CoNaLa: {len(filtered_samples)}")
+        logger.info(f"Total training samples available: {len(filtered_samples)}")
         
         return filtered_samples
     
@@ -616,10 +643,10 @@ class ModernDataLoader:
         logger.info(f"Integrated human feedback: matched {matched} entries into {len(samples)} samples")
 
     def generate_synthetic_human_feedback(self, n: int = 200, output_dir: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Generate a synthetic human-feedback dataset (ratings 1-5) and save to human_feedback_path.
+        """Generate synthetic human-feedback dataset based on CoNaLa data with realistic ratings.
 
-        The synthetic entries are generic and need not contain real code — they are intended
-        to let the pipeline exercise human-feedback integration during development.
+        This creates feedback entries using actual CoNaLa prompts and snippets, with ratings
+        based on code quality heuristics (syntax, length, complexity).
         """
         import random
         output_dir = output_dir or self.data_config.human_feedback_path
@@ -628,56 +655,131 @@ class ModernDataLoader:
 
         items: List[Dict[str, Any]] = []
 
-        use_model = getattr(self.data_config, 'use_model_for_synth_feedback', False)
-        model_name = getattr(self.data_config, 'synth_feedback_model_name', 'distilgpt2')
-        generator = None
-        if use_model:
-            try:
-                from transformers import pipeline, set_seed
-                device = 0 if (torch is not None and getattr(torch, 'cuda', None) and torch.cuda.is_available()) else -1
-                generator = pipeline('text-generation', model=model_name, device=device)
-                set_seed(42)
-                logger.info(f"Using model {model_name} to generate synthetic human feedback (device={device})")
-            except Exception as e:
-                logger.warning(f"Failed to initialize generation model {model_name}: {e}")
-                generator = None
-
-        for i in range(n):
-            prompt = f"Example prompt asking for solution {i}"
-            response = f"Example response content {i}"
-
-            rating = None
-            if generator is not None:
-                try:
-                    instruction = f"Rate the following response on a scale from 1 to 5 for correctness and usefulness, return only the integer rating. Response: '''{response}'''\nRating:"
-                    out = generator(instruction, max_new_tokens=8, do_sample=False)
-                    text = out[0].get('generated_text', '')
-                    m = re.search(r'([1-5])', text)
-                    if m:
-                        rating = int(m.group(1))
-                except Exception as e:
-                    logger.warning(f"Model generation failed for synth feedback sample {i}: {e}")
-
-            if rating is None:
-                rating = random.randint(1, 5)
-
-            items.append({
-                'id': f'synth_{i}',
-                'prompt': prompt,
-                'response': response,
-                'rating': rating,
-                'comment': f"Synthetic rating {rating}"
-            })
+        # Load CoNaLa train data to get real prompts and code
+        try:
+            logger.info("Loading CoNaLa data for synthetic feedback generation...")
+            conala_samples = self._load_conala_train_samples()
+            
+            if not conala_samples:
+                logger.warning("No CoNaLa samples available, falling back to generic feedback")
+                return self._generate_generic_feedback(n, out_path)
+            
+            # Sample n entries from CoNaLa
+            sample_size = min(n, len(conala_samples))
+            selected_samples = random.sample(conala_samples, sample_size)
+            
+            logger.info(f"Generating {sample_size} synthetic feedback entries from CoNaLa data...")
+            
+            for i, sample in enumerate(selected_samples):
+                prompt = sample.prompt
+                response = sample.response
+                qid = sample.metadata.get('question_id') if sample.metadata else f'synth_{i}'
+                
+                # Generate realistic rating based on code quality heuristics
+                rating = self._evaluate_code_quality(response)
+                
+                # Add some randomness to make it more realistic
+                rating = max(1, min(5, rating + random.randint(-1, 1)))
+                
+                items.append({
+                    'id': qid,
+                    'question_id': qid,
+                    'prompt': prompt,
+                    'response': response,
+                    'rating': rating,
+                    'comment': f"Synthetic rating based on code quality: {rating}/5",
+                    'source': 'conala_synthetic'
+                })
+            
+            logger.info(f"[OK] Generated {len(items)} CoNaLa-based feedback entries")
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate CoNaLa-based feedback: {e}")
+            logger.info("Falling back to generic feedback generation")
+            return self._generate_generic_feedback(n, out_path)
 
         # Save to a timestamped file so load_human_feedback can find it
         fname = out_path / f"synthetic_human_feedback_{int(time.time())}.json"
         try:
             with open(fname, 'w', encoding='utf-8') as f:
                 json.dump(items, f, indent=2)
-            logger.info(f"Wrote synthetic human feedback to {fname}")
+            logger.info(f"[OK] Wrote synthetic human feedback to {fname}")
         except Exception as e:
             logger.warning(f"Failed to write synthetic human feedback: {e}")
 
+        return items
+    
+    def _evaluate_code_quality(self, code: str) -> int:
+        """Evaluate code quality and return a rating from 1-5.
+        
+        Heuristics:
+        - Syntax correctness (can it be parsed?)
+        - Length (too short or too long is bad)
+        - Complexity indicators (functions, classes, etc.)
+        - Style (proper indentation, naming)
+        """
+        if not code or not code.strip():
+            return 1
+        
+        score = 3  # Start with neutral
+        
+        # Check syntax
+        try:
+            import ast
+            ast.parse(code)
+            score += 1  # Valid syntax
+        except:
+            score -= 1  # Invalid syntax
+        
+        # Check length (reasonable code should be 20-500 chars)
+        code_len = len(code.strip())
+        if 20 <= code_len <= 500:
+            score += 1
+        elif code_len < 10:
+            score -= 2
+        elif code_len > 1000:
+            score -= 1
+        
+        # Check for good practices
+        code_lower = code.lower()
+        if 'def ' in code or 'class ' in code:
+            score += 1  # Has functions/classes
+        if any(kw in code_lower for kw in ['import ', 'from ']):
+            score += 0.5  # Uses imports
+        if code.count('\n') >= 2:
+            score += 0.5  # Multi-line code
+        
+        # Clamp to 1-5 range
+        return max(1, min(5, int(round(score))))
+    
+    def _generate_generic_feedback(self, n: int, out_path: Path) -> List[Dict[str, Any]]:
+        """Fallback: generate generic synthetic feedback."""
+        import random
+        
+        items: List[Dict[str, Any]] = []
+        
+        for i in range(n):
+            prompt = f"Example prompt asking for solution {i}"
+            response = f"Example response content {i}"
+            rating = random.randint(1, 5)
+            
+            items.append({
+                'id': f'synth_{i}',
+                'prompt': prompt,
+                'response': response,
+                'rating': rating,
+                'comment': f"Generic synthetic rating {rating}"
+            })
+        
+        # Save
+        fname = out_path / f"synthetic_human_feedback_{int(time.time())}.json"
+        try:
+            with open(fname, 'w', encoding='utf-8') as f:
+                json.dump(items, f, indent=2)
+            logger.info(f"Wrote generic synthetic feedback to {fname}")
+        except Exception as e:
+            logger.warning(f"Failed to write generic feedback: {e}")
+        
         return items
     
     def _load_sft_data(self) -> List[DataSample]:
@@ -841,12 +943,14 @@ class ModernDataLoader:
                 continue
 
             # Determine acceptance
-            accept = False
+            require_code_like = getattr(self.data_config, 'require_code_like', True)
+
             if allow_empty_response:
                 accept = True
+            elif not require_code_like:
+                accept = True
             else:
-                if self._is_code_like(prompt) or self._is_code_like(response):
-                    accept = True
+                accept = self._is_code_like(prompt) or self._is_code_like(response)
 
             if not accept:
                 continue
@@ -1016,3 +1120,91 @@ class ModernDataLoader:
         logger.info(f"Loaded {len(samples)} samples from {filepath}")
         
         return samples
+
+    def generate_human_feedback_dataset(self, size: int):
+        import datetime
+        import random
+        import json
+        import os
+        from pathlib import Path
+
+        output_dir = Path(self.data_config.human_feedback_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load conala train for questions
+        dataset = self._load_conala_split('train')
+        if len(dataset) < size:
+            size = len(dataset)
+        selected = random.sample(range(len(dataset)), size)
+
+        for idx in selected:
+            item = dataset[idx]
+            question = item.get('rewritten_intent') or item.get('intent') or ""
+            id_val = item.get('question_id') or random.randint(10000000, 99999999)
+            good_answer = item.get('snippet') or "good code"
+            bad_answer = "bad code"  # TODO: make actual bad version
+
+            # Randomize L and R
+            if random.random() > 0.5:
+                answer_l = good_answer
+                answer_r = bad_answer
+                consistent_l = random.randint(1,2)
+                correct_l = random.randint(1,2)
+                useful_l = random.randint(1,2)
+                consistent_r = random.randint(-2,-1)
+                correct_r = random.randint(-2,-1)
+                useful_r = random.randint(-2,-1)
+            else:
+                answer_l = bad_answer
+                answer_r = good_answer
+                consistent_l = random.randint(-2,-1)
+                correct_l = random.randint(-2,-1)
+                useful_l = random.randint(-2,-1)
+                consistent_r = random.randint(1,2)
+                correct_r = random.randint(1,2)
+                useful_r = random.randint(1,2)
+
+            now = datetime.datetime.now()
+            timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
+            filename = f"{timestamp}-Synthetic.json"
+            filepath = output_dir / filename
+
+            data = {
+                "name_input": "Synthetic",
+                "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "address": "127.0.0.1",
+                "comparison_slider": random.randint(-100, 100),
+                "consistent_L": consistent_l,
+                "correct_L": correct_l,
+                "useful_L": useful_l,
+                "consistent_R": consistent_r,
+                "correct_R": correct_r,
+                "useful_R": useful_r,
+                "questions_df": [
+                    {
+                        "level_0": random.randint(0, 5000),
+                        "index": random.randint(0, 500),
+                        "ID": id_val,
+                        "Question": question,
+                        "Answer": answer_l,
+                        "CSV_PATH": "synthetic_l.csv",
+                        "CODE_FORMATTING": False,
+                        "MODEL_TAG": "Model L"
+                    },
+                    {
+                        "level_0": random.randint(0, 5000),
+                        "index": random.randint(0, 500),
+                        "ID": id_val,
+                        "Question": question,
+                        "Answer": answer_r,
+                        "CSV_PATH": "synthetic_r.csv",
+                        "CODE_FORMATTING": False,
+                        "MODEL_TAG": "Model R"
+                    }
+                ]
+            }
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+
+        logger.info(f"Generated {size} synthetic human feedback files in {output_dir}")

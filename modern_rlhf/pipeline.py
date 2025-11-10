@@ -365,6 +365,22 @@ class ModernRLHFPipeline:
         
         pbar.close()
         
+        # Диагностика: проверить что генерируется
+        empty_responses = sum(1 for r in all_responses if not r or not r.strip())
+        if empty_responses > 0:
+            logger.warning(f"⚠️  WARNING: {empty_responses}/{len(all_responses)} responses are empty!")
+            # Показать примеры пустых ответов
+            for i, (prompt, response) in enumerate(zip(all_prompts[:5], all_responses[:5])):
+                if not response or not response.strip():
+                    logger.warning(f"  Empty response {i}: prompt='{prompt[:50]}...'")
+        
+        # Показать примеры сгенерированных ответов для диагностики
+        logger.info("Sample generated responses (first 3):")
+        for i in range(min(3, len(all_responses))):
+            logger.info(f"  Prompt {i}: {all_prompts[i][:60]}...")
+            logger.info(f"  Response {i}: {all_responses[i][:100]}...")
+            logger.info(f"  Reference {i}: {all_references[i][:100] if all_references[i] else 'EMPTY'}...")
+        
         # Compute metrics
         metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
         
@@ -372,6 +388,9 @@ class ModernRLHFPipeline:
         evaluation_metrics = {}
         for metric_name, result in metrics_results.items():
             evaluation_metrics[metric_name] = result.score
+            # Логировать ошибки метрик если есть
+            if result.error:
+                logger.warning(f"Metric {metric_name} computation error: {result.error}")
         
         # Check against targets
         targets = {
@@ -398,6 +417,10 @@ class ModernRLHFPipeline:
             print("MODERN RLHF PIPELINE - Training Progress")
             print("="*70)
             logger.info("Starting full RLHF pipeline...")
+            
+            if self.config.data.generate_human_feedback:
+                print("\n[Generating synthetic human feedback dataset...]")
+                self.data_loader.generate_human_feedback_dataset(self.config.data.target_feedback_size)
             
             # Step 1: Load data
             print("\n[Step 1/5] Loading data...")
@@ -536,6 +559,10 @@ class ModernRLHFPipeline:
             'total_time': self.results.total_time,
             'success': self.results.success,
             'error_message': self.results.error_message,
+            # Include per-epoch histories for post-hoc analysis
+            'evaluation_history': getattr(self, 'evaluation_history', []),
+            'rlhf_history': getattr(self, 'rlhf_history', []),
+            'reward_history': getattr(self, 'reward_history', []),
             'timestamp': datetime.now().isoformat()
         }
         
@@ -587,6 +614,8 @@ class ModernRLHFPipeline:
             'training_time': self.results.training_time,
             'total_time': self.results.total_time,
             'honesty_assessment': honesty,
+            'evaluation_history': getattr(self, 'evaluation_history', []),
+            'rlhf_history': getattr(self, 'rlhf_history', []),
             'timestamp': datetime.now().isoformat()
         }
 

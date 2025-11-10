@@ -21,13 +21,18 @@ import json
 import os
 import time
 from tqdm import tqdm
-try:
-    import wandb  # Optional
-    _WANDB_AVAILABLE = True
-except Exception:  # broad to handle env issues
-    wandb = None
-    _WANDB_AVAILABLE = False
-import wandb
+import sys
+
+# Configure tqdm for better Windows console support
+if sys.platform == 'win32':
+    # Use ASCII mode for Windows consoles
+    tqdm_kwargs = {'ascii': True, 'ncols': 100, 'mininterval': 0.5}
+else:
+    tqdm_kwargs = {'ncols': 100, 'mininterval': 0.5}
+
+# Disable wandb integration by default for offline or CI runs
+wandb = None
+_WANDB_AVAILABLE = False
 from collections import defaultdict
 
 from .config import ModernRLHFConfig, TrainingConfig
@@ -74,6 +79,9 @@ class PPOTrainer:
         self.policy_model = self._load_policy_model()
         self.reference_model = self._load_reference_model()
         self.tokenizer = self._load_tokenizer()
+        
+        # CRITICAL: Synchronize pad_token_id with model vocab size after models are loaded
+        self._sync_tokenizer_with_model()
         
         # Initialize optimizer
         self.optimizer = torch.optim.AdamW(
@@ -122,21 +130,27 @@ class PPOTrainer:
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=torch_dtype,
-                trust_remote_code=self.config.model.trust_remote_code
+                trust_remote_code=self.config.model.trust_remote_code,
+                device_map=None,  # Отключить автоматическое распределение
+                low_cpu_mem_usage=False  # Отключить оптимизации памяти, которые вызывают предупреждения
             )
         except Exception:
             try:
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     model_name,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=self.config.model.trust_remote_code
+                    trust_remote_code=self.config.model.trust_remote_code,
+                    device_map=None,
+                    low_cpu_mem_usage=False
                 )
             except Exception:
                 # Fallback to base AutoModel (may not provide logits/generate)
                 model = AutoModel.from_pretrained(
                     model_name,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=self.config.model.trust_remote_code
+                    trust_remote_code=self.config.model.trust_remote_code,
+                    device_map=None,
+                    low_cpu_mem_usage=False
                 )
 
         if self.config.hardware.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
@@ -160,20 +174,26 @@ class PPOTrainer:
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 torch_dtype=torch_dtype,
-                trust_remote_code=self.config.model.trust_remote_code
+                trust_remote_code=self.config.model.trust_remote_code,
+                device_map=None,  # Отключить автоматическое распределение
+                low_cpu_mem_usage=False
             )
         except Exception:
             try:
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     model_name,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=self.config.model.trust_remote_code
+                    trust_remote_code=self.config.model.trust_remote_code,
+                    device_map=None,
+                    low_cpu_mem_usage=False
                 )
             except Exception:
                 model = AutoModel.from_pretrained(
                     model_name,
                     torch_dtype=torch_dtype,
-                    trust_remote_code=self.config.model.trust_remote_code
+                    trust_remote_code=self.config.model.trust_remote_code,
+                    device_map=None,
+                    low_cpu_mem_usage=False
                 )
 
         # Freeze reference model
@@ -197,8 +217,37 @@ class PPOTrainer:
             trust_remote_code=self.config.model.trust_remote_code
         )
         
+        # Ensure pad_token is set - critical for generation
+        # Use eos_token as pad_token (standard for GPT models) to avoid resizing model
         if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+            if tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+            elif tokenizer.unk_token is not None:
+                # Fallback: use unk_token if eos_token is not available
+                tokenizer.pad_token = tokenizer.unk_token
+                tokenizer.pad_token_id = tokenizer.unk_token_id
+            else:
+                logger.warning("Could not set pad_token - generation may fail. Trying to use token 0.")
+                # Last resort: try to use token at index 0 (but this is risky)
+                try:
+                    tokenizer.pad_token_id = 0
+                except Exception:
+                    logger.error("Failed to set pad_token_id - generation will likely fail")
+        
+        # Verify pad_token_id is valid
+        vocab_size = getattr(tokenizer, 'vocab_size', None)
+        if vocab_size is None:
+            try:
+                vocab_size = len(tokenizer.get_vocab())
+            except Exception:
+                vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else 50257  # GPT-2 default
+        if tokenizer.pad_token_id is not None:
+            if tokenizer.pad_token_id < 0 or tokenizer.pad_token_id >= vocab_size:
+                logger.warning(f"pad_token_id ({tokenizer.pad_token_id}) is out of vocab range ({vocab_size}), using eos_token_id")
+                if tokenizer.eos_token_id is not None and tokenizer.eos_token_id < vocab_size:
+                    tokenizer.pad_token_id = tokenizer.eos_token_id
+        
         # Ensure left padding for decoder-only models to avoid generation issues
         try:
             tokenizer.padding_side = 'left'
@@ -206,6 +255,55 @@ class PPOTrainer:
             pass
         
         return tokenizer
+    
+    def _sync_tokenizer_with_model(self):
+        """Synchronize tokenizer pad_token_id with model vocab size to prevent CUDA errors."""
+        if not hasattr(self, 'policy_model') or self.policy_model is None:
+            return
+        
+        # Get model vocab size
+        model_vocab_size = None
+        if hasattr(self.policy_model, 'config'):
+            model_vocab_size = getattr(self.policy_model.config, 'vocab_size', None)
+        if model_vocab_size is None:
+            try:
+                emb = self.policy_model.get_input_embeddings()
+                if hasattr(emb, 'num_embeddings'):
+                    model_vocab_size = emb.num_embeddings
+            except Exception:
+                pass
+        
+        if model_vocab_size is None:
+            logger.warning("Could not determine model vocab size, skipping tokenizer sync")
+            return
+        
+        # Check and fix pad_token_id
+        current_pad_token_id = self.tokenizer.pad_token_id
+        if current_pad_token_id is not None:
+            if current_pad_token_id < 0 or current_pad_token_id >= model_vocab_size:
+                # Fix invalid pad_token_id
+                if self.tokenizer.eos_token_id is not None:
+                    if 0 <= self.tokenizer.eos_token_id < model_vocab_size:
+                        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+                        self.tokenizer.pad_token = self.tokenizer.eos_token
+                        logger.info(f"Fixed pad_token_id: {current_pad_token_id} -> {self.tokenizer.eos_token_id} (vocab_size={model_vocab_size})")
+                    else:
+                        # Use a safe fallback - use token 0 if valid
+                        safe_token_id = 0 if model_vocab_size > 0 else None
+                        if safe_token_id is not None:
+                            self.tokenizer.pad_token_id = safe_token_id
+                            logger.warning(f"Fixed pad_token_id: {current_pad_token_id} -> {safe_token_id} (vocab_size={model_vocab_size})")
+                        else:
+                            logger.error(f"Cannot fix pad_token_id: vocab_size={model_vocab_size}")
+        
+        # Also update model config
+        if hasattr(self.policy_model, 'config'):
+            try:
+                self.policy_model.config.pad_token_id = self.tokenizer.pad_token_id
+                if self.tokenizer.eos_token_id is not None:
+                    self.policy_model.config.eos_token_id = self.tokenizer.eos_token_id
+            except Exception:
+                pass
     
     def generate_responses(self, prompts: List[str]) -> Dict[str, Any]:
         """Generate responses for given prompts."""
@@ -220,19 +318,132 @@ class PPOTrainer:
             return_tensors="pt"
         ).to(self.device)
         
-        # Generate responses
-        with torch.no_grad():
-            outputs = self.policy_model.generate(
-                **inputs,
-                max_new_tokens=self.config.generation.max_new_tokens,
-                temperature=self.config.generation.temperature,
-                top_p=self.config.generation.top_p,
-                top_k=self.config.generation.top_k,
-                do_sample=self.config.generation.do_sample,
-                repetition_penalty=self.config.generation.repetition_penalty,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
+        # Get vocab size from model config (more reliable than tokenizer)
+        model_vocab_size = None
+        if hasattr(self.policy_model, 'config'):
+            model_vocab_size = getattr(self.policy_model.config, 'vocab_size', None)
+        
+        # Fallback to tokenizer vocab size
+        if model_vocab_size is None:
+            model_vocab_size = getattr(self.tokenizer, 'vocab_size', None)
+        if model_vocab_size is None:
+            try:
+                model_vocab_size = len(self.tokenizer.get_vocab())
+            except Exception:
+                # Last resort: try to get from model's embedding layer
+                if hasattr(self.policy_model, 'get_input_embeddings'):
+                    try:
+                        emb = self.policy_model.get_input_embeddings()
+                        if hasattr(emb, 'num_embeddings'):
+                            model_vocab_size = emb.num_embeddings
+                    except Exception:
+                        pass
+                if model_vocab_size is None:
+                    model_vocab_size = 50257  # GPT-2 default fallback
+        
+        pad_token_id = self.tokenizer.pad_token_id
+        eos_token_id = self.tokenizer.eos_token_id
+
+        # Debug: log token info once to diagnose CUDA issues
+        if not hasattr(self, '_debug_pad_logged'):
+            msg = (
+                f"Tokenizer/model token info: pad_token_id={pad_token_id}, "
+                f"eos_token_id={eos_token_id}, vocab_size={model_vocab_size}"
             )
+            logger.info(msg)
+            print(msg)
+            self._debug_pad_logged = True
+        
+        # CRITICAL: Validate pad_token_id against model vocab size
+        # This is the source of CUDA errors if pad_token_id >= vocab_size
+        if pad_token_id is None:
+            pad_token_id = eos_token_id  # Use eos_token as pad_token (standard for GPT models)
+        
+        if pad_token_id is None or pad_token_id < 0:
+            pad_token_id = 0  # Fallback to token 0
+            logger.warning(f"pad_token_id was None or negative, using 0")
+        
+        if pad_token_id >= model_vocab_size:
+            # CRITICAL FIX: pad_token_id must be < vocab_size
+            if eos_token_id is not None and eos_token_id >= 0 and eos_token_id < model_vocab_size:
+                pad_token_id = eos_token_id
+                logger.warning(f"pad_token_id ({self.tokenizer.pad_token_id}) >= vocab_size ({model_vocab_size}), using eos_token_id ({eos_token_id})")
+            else:
+                pad_token_id = model_vocab_size - 1  # Use last valid token
+                logger.warning(f"pad_token_id >= vocab_size ({model_vocab_size}), using last valid token ({pad_token_id})")
+        
+        # Validate eos_token_id
+        if eos_token_id is None or eos_token_id < 0:
+            # Try to get from model config
+            if hasattr(self.policy_model, 'config') and hasattr(self.policy_model.config, 'eos_token_id'):
+                eos_token_id = self.policy_model.config.eos_token_id
+        
+        if eos_token_id is not None and eos_token_id >= model_vocab_size:
+            logger.warning(f"eos_token_id ({eos_token_id}) >= vocab_size ({model_vocab_size}), not setting eos_token_id")
+            eos_token_id = None  # Don't use invalid eos_token_id
+        
+        # Also update model config to ensure consistency
+        if hasattr(self.policy_model, 'config'):
+            try:
+                self.policy_model.config.pad_token_id = pad_token_id
+                if eos_token_id is not None:
+                    self.policy_model.config.eos_token_id = eos_token_id
+            except Exception:
+                pass  # Some models don't allow config modification
+        
+        # Prepare generation kwargs
+        do_sample = bool(getattr(self.config.generation, 'do_sample', False))
+        generation_kwargs = {
+            'max_new_tokens': getattr(self.config.generation, 'max_new_tokens', 128),
+            'do_sample': do_sample,
+            'repetition_penalty': getattr(self.config.generation, 'repetition_penalty', 1.0),
+        }
+
+        if do_sample:
+            generation_kwargs['temperature'] = getattr(self.config.generation, 'temperature', 1.0)
+            generation_kwargs['top_p'] = getattr(self.config.generation, 'top_p', 1.0)
+            generation_kwargs['top_k'] = getattr(self.config.generation, 'top_k', 0)
+        else:
+            generation_kwargs['num_beams'] = max(1, getattr(self.config.generation, 'num_beams', 1))
+        
+        bos_token_id = getattr(self.tokenizer, 'bos_token_id', None)
+        if bos_token_id is None or bos_token_id < 0 or bos_token_id >= model_vocab_size:
+            bos_token_id = pad_token_id if pad_token_id is not None else eos_token_id
+        if bos_token_id is not None and bos_token_id >= 0 and bos_token_id < model_vocab_size:
+            generation_kwargs['bos_token_id'] = bos_token_id
+
+        # Only add pad_token_id if it's valid
+        if pad_token_id is not None and pad_token_id >= 0 and pad_token_id < model_vocab_size:
+            generation_kwargs['pad_token_id'] = pad_token_id
+        else:
+            logger.error(f"ERROR: Cannot use pad_token_id={pad_token_id} with vocab_size={model_vocab_size}")
+            raise ValueError(f"Invalid pad_token_id={pad_token_id} for vocab_size={model_vocab_size}")
+        
+        # Only add eos_token_id if it's valid
+        if eos_token_id is not None and eos_token_id >= 0 and eos_token_id < model_vocab_size:
+            generation_kwargs['eos_token_id'] = eos_token_id
+        
+        # Generate responses with fallback for sampling issues
+        try:
+            with torch.no_grad():
+                outputs = self.policy_model.generate(
+                    **inputs,
+                    **generation_kwargs
+                )
+        except RuntimeError as err:
+            logger.warning(f"Sampling generation failed ({err}). Falling back to greedy decoding.")
+            fallback_kwargs = generation_kwargs.copy()
+            fallback_kwargs['do_sample'] = False
+            fallback_kwargs.pop('temperature', None)
+            fallback_kwargs.pop('top_p', None)
+            fallback_kwargs.pop('top_k', None)
+            fallback_kwargs.setdefault('num_beams', max(1, getattr(self.config.generation, 'num_beams', 1)))
+
+            with torch.no_grad():
+                outputs = self.policy_model.generate(
+                    **inputs,
+                    **fallback_kwargs
+                )
         
         # Decode responses
         response_texts = []
@@ -241,6 +452,8 @@ class PPOTrainer:
             prompt_length = inputs['input_ids'][i].shape[0]
             response_tokens = output[prompt_length:]
             response_text = self.tokenizer.decode(response_tokens, skip_special_tokens=True)
+            if not response_text.strip():
+                response_text = self.tokenizer.eos_token or " "
             response_texts.append(response_text)
         
         return {
@@ -336,8 +549,66 @@ class PPOTrainer:
         self.policy_model.train()
         
         prompts = batch['prompts']
-        responses = batch['responses']
-        old_log_probs = batch.get('old_log_probs', None)
+        
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Генерировать новые ответы на каждом шаге!
+        # В PPO мы должны генерировать ответы текущей политикой, а не использовать старые из датасета
+        generation_output = self.generate_responses(prompts)
+        responses = generation_output['response_texts']
+        
+        # Вычислить старые log probabilities с reference model для сравнения
+        with torch.no_grad():
+            old_inputs = self.tokenizer(
+                responses,
+                padding=True,
+                truncation=True,
+                max_length=self.config.generation.max_response_length,
+                return_tensors="pt"
+            ).to(self.device)
+            
+            old_outputs = self.reference_model(**old_inputs)
+            if hasattr(old_outputs, 'logits') and old_outputs.logits is not None:
+                old_logits = old_outputs.logits
+            elif hasattr(self.reference_model, 'lm_head') and hasattr(old_outputs, 'last_hidden_state'):
+                old_logits = self.reference_model.lm_head(old_outputs.last_hidden_state)
+            else:
+                emb = self.reference_model.get_output_embeddings() if hasattr(self.reference_model, 'get_output_embeddings') else None
+                if emb is not None and hasattr(old_outputs, 'last_hidden_state'):
+                    old_logits = torch.matmul(old_outputs.last_hidden_state, emb.weight.t())
+                else:
+                    # Fallback: use policy model for old log probs if reference model doesn't work
+                    old_logits = old_outputs.last_hidden_state.mean(dim=1, keepdim=True) if hasattr(old_outputs, 'last_hidden_state') else None
+                    if old_logits is None:
+                        old_log_probs = None
+                    else:
+                        old_log_probs = F.log_softmax(old_logits, dim=-1)
+            
+            if old_logits is not None:
+                # Правильное вычисление log probabilities для последовательности токенов
+                old_log_probs_tensor = F.log_softmax(old_logits, dim=-1)
+                response_mask = old_inputs['attention_mask']
+                
+                # Извлечь log probs для каждого токена ответа
+                old_log_probs = []
+                for i in range(len(responses)):
+                    response_tokens = old_inputs['input_ids'][i]
+                    mask = response_mask[i]
+                    
+                    # Получить log prob для каждого токена
+                    token_log_probs = []
+                    for j in range(len(response_tokens)):
+                        if mask[j] > 0:  # Только не-padding токены
+                            token_id = response_tokens[j].item()
+                            if token_id < old_log_probs_tensor.shape[-1]:
+                                token_log_probs.append(old_log_probs_tensor[i, j, token_id])
+                    
+                    if token_log_probs:
+                        old_log_probs.append(torch.stack(token_log_probs).sum())
+                    else:
+                        old_log_probs.append(torch.tensor(0.0, device=self.device))
+                
+                old_log_probs = torch.stack(old_log_probs) if old_log_probs else None
+            else:
+                old_log_probs = None
         
         # Compute rewards
         rewards = self.compute_rewards(prompts, responses)
@@ -349,10 +620,17 @@ class PPOTrainer:
         entropy = self.compute_entropy(prompts, responses)
         
         # Compute advantages (simplified)
+        # Убедиться что rewards - это тензор на правильном устройстве
+        if not isinstance(rewards, torch.Tensor):
+            rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
         advantages = rewards - rewards.mean()
         
+        # Убедиться что advantages на правильном устройстве
+        if advantages.device != self.device:
+            advantages = advantages.to(self.device)
+        
         # Compute policy loss
-        if old_log_probs is not None:
+        if old_log_probs is not None and len(old_log_probs) == len(prompts):
             # Compute new log probabilities
             inputs = self.tokenizer(
                 responses,
@@ -375,10 +653,36 @@ class PPOTrainer:
                 else:
                     raise AttributeError("Unable to extract logits for new_log_probs")
 
-            new_log_probs = F.log_softmax(logits_for_new, dim=-1)
+            new_log_probs_tensor = F.log_softmax(logits_for_new, dim=-1)
+            # Правильное вычисление log probabilities для последовательности токенов
+            response_mask = inputs['attention_mask']
             
-            # Compute ratio
-            ratio = torch.exp(new_log_probs - old_log_probs)
+            new_log_probs = []
+            for i in range(len(responses)):
+                response_tokens = inputs['input_ids'][i]
+                mask = response_mask[i]
+                
+                # Получить log prob для каждого токена
+                token_log_probs = []
+                for j in range(len(response_tokens)):
+                    if mask[j] > 0:  # Только не-padding токены
+                        token_id = response_tokens[j].item()
+                        if token_id < new_log_probs_tensor.shape[-1]:
+                            token_log_probs.append(new_log_probs_tensor[i, j, token_id])
+                
+                if token_log_probs:
+                    new_log_probs.append(torch.stack(token_log_probs).sum())
+                else:
+                    new_log_probs.append(torch.tensor(0.0, device=self.device))
+            
+            new_log_probs = torch.stack(new_log_probs) if new_log_probs else None
+            
+            # Compute ratio - проверка что оба тензора не None
+            if new_log_probs is not None and old_log_probs is not None:
+                ratio = torch.exp(new_log_probs - old_log_probs)
+            else:
+                # Fallback: используем упрощенную версию
+                ratio = torch.ones(len(prompts), device=self.device)
             
             # Compute clipped loss
             clipped_ratio = torch.clamp(
@@ -392,8 +696,12 @@ class PPOTrainer:
                 clipped_ratio * advantages
             ).mean()
         else:
-            # Simplified policy loss
+            # Simplified policy loss if old_log_probs not available
             policy_loss = -rewards.mean()
+        
+        # Убедиться что policy_loss - скаляр на правильном устройстве
+        if isinstance(policy_loss, torch.Tensor) and policy_loss.device != self.device:
+            policy_loss = policy_loss.to(self.device)
         
         # Compute value loss (simplified)
         value_loss = F.mse_loss(rewards, rewards.mean().expand_as(rewards))
@@ -446,7 +754,10 @@ class PPOTrainer:
             total=total_batches,
             desc=f"Epoch {self.epoch+1}/{self.config.training.ppo_epochs}",
             unit="batch",
-            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+            file=sys.stdout,  # Explicitly write to stdout
+            dynamic_ncols=True,  # Auto-adjust to terminal width
+            **tqdm_kwargs
         )
         
         for batch_idx, batch in pbar:
@@ -468,29 +779,7 @@ class PPOTrainer:
             })
             
             # Log to wandb
-            if self._wandb_enabled:
-                try:
-                    wandb.log({
-                        'step': step.step,
-                        'loss': step.loss,
-                        'reward': step.reward,
-                        'kl_divergence': step.kl_divergence,
-                        'entropy': step.entropy,
-                        'learning_rate': step.learning_rate,
-                        **step.metrics
-                    })
-                except Exception as e:
-                    logger.warning(f"wandb.log failed: {e}")
-            if hasattr(self, 'wandb') and self.wandb:
-                wandb.log({
-                    'step': step.step,
-                    'loss': step.loss,
-                    'reward': step.reward,
-                    'kl_divergence': step.kl_divergence,
-                    'entropy': step.entropy,
-                    'learning_rate': step.learning_rate,
-                    **step.metrics
-                })
+            # wandb integration intentionally disabled
             
             # Save checkpoint
             if step.step % self.config.training.save_steps == 0:
@@ -537,7 +826,10 @@ class PPOTrainer:
                 eval_dataloader,
                 desc="Evaluating",
                 unit="batch",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                file=sys.stdout,  # Explicitly write to stdout
+                dynamic_ncols=True,  # Auto-adjust to terminal width
+                **tqdm_kwargs
             )
             
             for batch in pbar:
@@ -605,17 +897,50 @@ class PPOTrainer:
         self.policy_model.save_pretrained(checkpoint_dir)
         self.tokenizer.save_pretrained(checkpoint_dir)
         
-        # Save training state
+        # Save training state (convert tensors to JSON-serializable types)
         training_state = {
-            'step': self.step,
-            'epoch': self.epoch,
-            'best_reward': self.best_reward,
+            'step': int(self.step),
+            'epoch': int(self.epoch),
+            'best_reward': float(self.best_reward),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict()
         }
-        
+
+        def _to_json_safe(obj):
+            """Recursively convert torch tensors and numpy types to JSON-safe Python types."""
+            import numpy as _np
+            try:
+                import torch as _torch
+            except Exception:
+                _torch = None
+
+            if _torch is not None and _torch.is_tensor(obj):
+                try:
+                    return obj.detach().cpu().numpy().tolist()
+                except Exception:
+                    try:
+                        return float(obj.detach().cpu())
+                    except Exception:
+                        return None
+            if isinstance(obj, dict):
+                return {k: _to_json_safe(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_to_json_safe(v) for v in obj]
+            if isinstance(obj, tuple):
+                return tuple(_to_json_safe(v) for v in obj)
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            if isinstance(obj, (_np.floating,)):
+                return float(obj)
+            if isinstance(obj, (_np.bool_,)):
+                return bool(obj)
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
+            return obj
+
+        safe_state = _to_json_safe(training_state)
         with open(os.path.join(checkpoint_dir, 'training_state.json'), 'w') as f:
-            json.dump(training_state, f, indent=2)
+            json.dump(safe_state, f, indent=2)
         
         logger.info(f"Checkpoint saved to {checkpoint_dir}")
     
@@ -816,7 +1141,7 @@ class DPOTrainer:
         """Train for one epoch."""
         epoch_metrics = defaultdict(list)
         
-        for batch in tqdm(dataloader, desc=f"DPO Epoch {self.epoch}"):
+        for batch in tqdm(dataloader, desc=f"DPO Epoch {self.epoch}", file=sys.stdout, dynamic_ncols=True, **tqdm_kwargs):
             step = self.dpo_step(batch)
             
             # Collect metrics
@@ -903,11 +1228,22 @@ class ModernRLHFTrainer:
                 else:
                     patience_counter += 1
                 
-                # Early stopping
+                # Early stopping - только если reward действительно не улучшается
+                # Но не останавливаться слишком рано если метрики низкие
                 if patience_counter >= self.config.training.early_stopping_patience:
-                    logger.info("Early stopping triggered")
-                    print(f"\n[Early Stopping] No improvement for {patience_counter} epochs")
-                    break
+                    # Проверить что мы действительно не улучшаемся
+                    current_reward = eval_metrics.get('avg_reward', 0)
+                    best_reward = best_metrics.get('avg_reward', -float('inf'))
+                    
+                    # Если reward очень низкий, не останавливаться рано (даем больше шансов)
+                    if current_reward < 0.1 and epoch < self.config.training.ppo_epochs // 2:
+                        logger.info(f"Reward still very low ({current_reward:.4f}), continuing training despite no improvement")
+                        patience_counter = patience_counter // 2  # Уменьшаем счетчик, даем больше времени
+                    else:
+                        logger.info("Early stopping triggered")
+                        print(f"\n[Early Stopping] No improvement for {patience_counter} epochs")
+                        print(f"  Best reward: {best_reward:.4f}, Current reward: {current_reward:.4f}")
+                        break
                 
                 print(f"  Eval time: {eval_time:.1f}s | Reward: {eval_metrics.get('avg_reward', 0):.4f}")
                 # Print evaluation metrics if available

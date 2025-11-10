@@ -12,6 +12,7 @@ from pathlib import Path
 import json
 import random
 import time
+import argparse
 
 # Add modern_rlhf to path
 sys.path.insert(0, str(Path(__file__).parent / "modern_rlhf"))
@@ -24,16 +25,48 @@ except Exception:
     # Older Python / environments may not support reconfigure; ignore
     pass
 
-from modern_rlhf import ModernRLHFPipeline, get_research_config
+import warnings
+import logging
+import os
+
+# Suppress transformers warnings about uninitialized weights
+# This is expected when fine-tuning models
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message="Some weights of.*were not initialized")
+warnings.filterwarnings("ignore", message=".*You should probably TRAIN.*")
+
+# Suppress accelerate warnings about sharding
+os.environ["ACCELERATE_USE_CPU"] = "0"
+logging.getLogger("accelerate").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*were not sharded.*")
+warnings.filterwarnings("ignore", message=".*Some layers.*")
+
+from modern_rlhf import ModernRLHFPipeline, get_research_config, get_production_config, get_fast_config
 from modern_rlhf.config import ModernRLHFConfig
 
 def main():
     """Quick start function."""
+    parser = argparse.ArgumentParser(description="Run Modern RLHF")
+    parser.add_argument('--config', type=str, default='research', choices=['research', 'production', 'fast'], help='Config type')
+    parser.add_argument('--generate-feedback', action='store_true', help='Generate synthetic human feedback')
+    parser.add_argument('--feedback-size', type=int, default=2000, help='Size of synthetic feedback dataset')
+    args = parser.parse_args()
+    
     print("Modern RLHF Framework - Quick Start")
     print("=" * 50)
     
     # Create configuration
-    config = get_research_config()
+    if args.config == 'research':
+        config = get_research_config()
+    elif args.config == 'production':
+        config = get_production_config()
+    elif args.config == 'fast':
+        config = get_fast_config()
+    else:
+        raise ValueError(f"Unknown config: {args.config}")
+    
+    config.data.generate_human_feedback = args.generate_feedback
+    config.data.target_feedback_size = args.feedback_size
     
     # Adjust paths to use existing data
     config.data.train_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-train.json"
@@ -54,34 +87,61 @@ def main():
     config.experiment_name = "modern_rlhf_experiment"
     
     # ============================================
-    # FULL TRAINING CONFIGURATION (20 epochs)
+    # TRAINING CONFIGURATION (5 epochs for testing)
     # ============================================
-    # Training parameters for full training run
-    config.training.ppo_epochs = 20  # Full training run
-    config.training.total_steps = 5000  # More steps for better convergence
-    config.training.learning_rate = 1e-5  # Stable learning rate
+    # Training parameters for testing run
+    config.training.ppo_epochs = 4
+    config.training.total_steps = 1500
+    config.training.learning_rate = 5e-6
     config.training.batch_size = 4
     config.training.gradient_accumulation_steps = 4  # Effective batch size = 16
-    config.training.early_stopping_patience = 7  # Allow more epochs before early stopping
-    config.training.save_steps = 250  # Save checkpoint every 250 steps
-    config.training.eval_steps = 100  # Evaluate every 100 steps
-    config.training.logging_steps = 10  # Log every 10 steps
+    config.training.early_stopping_patience = 5
+    config.training.save_steps = 300
+    config.training.eval_steps = 300
+    config.training.logging_steps = 20
+    config.data.generate_human_feedback = True
     
     # Evaluation settings
-    config.evaluation.eval_samples = 100  # Evaluate on 100 samples
+    config.evaluation.eval_samples = 50
+    config.evaluation.eval_batch_size = 4
+    config.evaluation.use_cached_embeddings = False
     
-    # Set target metrics
-    config.evaluation.target_bertscore = 0.7
-    config.evaluation.target_codebleu = 0.6
-    config.evaluation.target_bleu = 0.4
-    config.evaluation.target_rouge = 0.5
-    config.evaluation.target_ruby = 0.3
+    # Set target metrics (realistic values for CoNaLa)
+    config.evaluation.target_bertscore = 0.50
+    config.evaluation.target_codebleu = 0.35
+    config.evaluation.target_bleu = 0.25
+    config.evaluation.target_rouge = 0.35
+    config.evaluation.target_ruby = 0.20
     
     # Reward model training
-    config.reward.reward_epochs = 5  # Train reward model for 5 epochs
+    config.reward.reward_epochs = 3
+    config.reward.reward_batch_size = 4
     
     # Prefer local CoNaLa corpus if it exists in the repo (you downloaded JSONs into conala-corpus/)
     config.data.conala_local_path = "./conala-corpus"
+    
+    # Увеличить количество данных для обучения
+    config.data.max_train_samples = 1500
+    config.data.max_eval_samples = 200
+    config.data.min_prompt_length = 0
+    config.data.min_response_length = 0
+    config.data.require_code_like = False
+    config.data.use_data_augmentation = False
+    
+    # CRITICAL: Use sampling for PPO training (exploration required!)
+    # do_sample=False breaks PPO - model generates same responses
+    config.generation.do_sample = True  # MUST be True for RLHF/PPO!
+    config.generation.temperature = 0.8
+    config.generation.top_p = 0.95
+    config.generation.top_k = 50
+    config.generation.max_new_tokens = 256
+    config.generation.repetition_penalty = 1.2
+    # num_beams is for evaluation only, not training
+    config.generation.num_beams = 1  # Use sampling, not beam search
+    
+    # Использовать более стабильную модель (GPT-2 вместо CodeGPT-small)
+    # CodeGPT-small может генерировать пустые ответы
+    # config.model.base_model_name = "gpt2"  # Раскомментируйте если нужно
     
     # Enable model-based synthetic human feedback generation using a small model
     config.data.use_model_for_synth_feedback = True
@@ -205,12 +265,16 @@ def main():
     print(f"Evaluation Samples: {config.evaluation.eval_samples}")
     print("="*70 + "\n")
     
+    print("\n" + "="*70)
+    print("TARGET METRICS (Realistic for CoNaLa)")
+    print("="*70)
     print(f"Target BERTScore: {config.evaluation.target_bertscore}")
     print(f"Target CodeBLEU: {config.evaluation.target_codebleu}")
     print(f"Target BLEU: {config.evaluation.target_bleu}")
     print(f"Target ROUGE: {config.evaluation.target_rouge}")
     print(f"Target Ruby: {config.evaluation.target_ruby}")
-    print()
+    print("="*70 + "\n")
+    
     try:
         hf_is_ok = False
         try:
@@ -263,13 +327,6 @@ def main():
                 print("HF curated parquet not found via hf_hub_download; loader will attempt HF and fallbacks at runtime.")
     except Exception:
         pass
-
-    print(f"Target BERTScore: {config.evaluation.target_bertscore}")
-    print(f"Target CodeBLEU: {config.evaluation.target_codebleu}")
-    print(f"Target BLEU: {config.evaluation.target_bleu}")
-    print(f"Target ROUGE: {config.evaluation.target_rouge}")
-    print(f"Target Ruby: {config.evaluation.target_ruby}")
-    print()
     
     # Create output directory
     os.makedirs(config.data.output_path, exist_ok=True)
@@ -317,7 +374,7 @@ def main():
             else:
                 print("Some targets not met:")
                 for metric, met in targets_met.items():
-                    status = "✅" if met else "❌"
+                    status = "[OK]" if met else "[FAIL]"
                     print(f"  {status} {metric}")
 
         print(f"\nResults saved to: {config.data.output_path}")

@@ -13,12 +13,8 @@ A state-of-the-art reward model that combines multiple signals:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import (
-    AutoModel, AutoTokenizer, AutoConfig,
-    PreTrainedModel, PreTrainedTokenizer
-)
-from typing import List, Dict, Any, Optional, Tuple, Union
 import logging
+import warnings
 import numpy as np
 from dataclasses import dataclass
 import json
@@ -26,6 +22,17 @@ import os
 import ast
 import subprocess
 import tempfile
+from transformers import (
+    AutoModel, AutoTokenizer, AutoConfig,
+    PreTrainedModel, PreTrainedTokenizer
+)
+from typing import List, Dict, Any, Optional, Tuple, Union
+
+# Suppress transformers warnings about uninitialized weights
+# This is expected when fine-tuning models (we add custom heads)
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message="Some weights of.*were not initialized")
+warnings.filterwarnings("ignore", message=".*You should probably TRAIN.*")
 
 from .metrics import ModernMetricsEvaluator, CodeQualityAnalyzer
 from .config import RewardConfig
@@ -258,7 +265,16 @@ class ModernRewardModel(nn.Module):
             self.device = torch.device(device)
         
         # Load base model
-        self.base_model = AutoModel.from_pretrained(model_name)
+        # Suppress warnings about uninitialized weights (expected for fine-tuning)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Some weights of.*were not initialized")
+            warnings.filterwarnings("ignore", message=".*You should probably TRAIN.*")
+            self.base_model = AutoModel.from_pretrained(
+                model_name,
+                ignore_mismatched_sizes=False,  # Keep False to detect real mismatches
+                device_map=None,  # Отключить автоматическое распределение
+                low_cpu_mem_usage=False  # Отключить оптимизации памяти
+            )
         self.base_model = self.base_model.to(self.device)  # Move to GPU immediately
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         try:
