@@ -99,15 +99,15 @@ class HumanFeedbackIntegrator:
                 rating = item.get('rating', 0.0)
                 logits = item.get('logits', None)
 
-                # Store human logits if available
-                if logits and self.config.use_human_logits:
+                # Store feedback data (with or without logits)
+                if prompt and response:  # Only need prompt and response
                     key = f"{prompt[:50]}_{response[:50]}"
                     self.human_logits_cache[key] = {
-                        'logits': logits,
+                        'logits': logits,  # May be None
                         'rating': rating
                     }
 
-            logger.info(f"Loaded {len(self.human_logits_cache)} human feedback entries")
+            logger.info(f"Loaded {len(self.human_logits_cache)} human feedback entries with ratings")
 
         except Exception as e:
             logger.warning(f"Failed to load human feedback: {e}")
