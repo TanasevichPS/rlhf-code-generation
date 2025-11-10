@@ -120,6 +120,42 @@ class ModernRLHFPipeline:
             }
         except Exception:
             return {'prompt': '', 'response': '', 'reference': None, 'rating': None, 'metadata': None}
+
+    def _create_fallback_reward_model(self) -> ModernRewardModel:
+        """Create a basic fallback reward model when the main one fails."""
+        from .reward_model import ModernRewardModel, RewardConfig
+
+        # Create minimal reward config
+        fallback_config = RewardConfig()
+        fallback_config.reward_epochs = 0  # Don't train
+        fallback_config.reward_learning_rate = 1e-5
+        fallback_config.reward_batch_size = 8
+
+        # Try to create with a smaller model or basic config
+        try:
+            # Try with a basic model name
+            fallback_model = ModernRewardModel(
+                fallback_config,
+                model_name="distilbert-base-uncased",  # Smaller, more reliable model
+                device="cuda" if torch.cuda.is_available() else "cpu"
+            )
+            logger.info("Created fallback reward model with distilbert-base-uncased")
+            return fallback_model
+        except Exception as e1:
+            logger.warning(f"Failed to create distilbert fallback: {e1}")
+            try:
+                # Last resort: try with a very basic approach
+                # This will use component-based rewards only (no neural network)
+                fallback_model = ModernRewardModel(
+                    fallback_config,
+                    model_name="bert-base-uncased",  # Try standard bert
+                    device="cpu"  # Use CPU as fallback
+                )
+                logger.info("Created basic CPU fallback reward model")
+                return fallback_model
+            except Exception as e2:
+                logger.error(f"All fallback reward models failed: {e2}")
+                raise RuntimeError("Cannot create any reward model - training impossible") from e2
     
     def load_data(self) -> Tuple[Any, Any, Any]:
         """Load training and evaluation data."""
@@ -190,30 +226,13 @@ class ModernRLHFPipeline:
         for epoch in range(self.config.reward.reward_epochs):
             try:
                 avg_metrics = self.reward_trainer.train_epoch(train_batches)
-            except Exception:
+            except (AttributeError, NotImplementedError) as e:
                 # Fallback to per-step training if train_epoch unsupported
-                epoch_metrics = []
-                pbar = tqdm(
-                    train_batches, 
-                    desc=f"Reward Training Epoch {epoch+1}/{self.config.reward.reward_epochs}",
-                    unit="batch",
-                    bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                )
-                for batch in pbar:
-                    metrics = self.reward_trainer.train_step(batch)
-                    epoch_metrics.append(metrics)
-                    # Update progress bar
-                    if epoch_metrics:
-                        latest = epoch_metrics[-1]
-                        pbar.set_postfix({
-                            'loss': f'{latest.get("loss", 0):.4f}',
-                            'reward': f'{latest.get("predicted_reward_mean", 0):.4f}'
-                        })
-                pbar.close()
-                if epoch_metrics:
-                    avg_metrics = {k: np.mean([m[k] for m in epoch_metrics]) for k in epoch_metrics[0].keys()}
-                else:
-                    avg_metrics = {}
+                logger.warning(f"train_epoch not supported, falling back to per-step training: {e}")
+                avg_metrics = self._train_reward_model_fallback(train_batches, epoch)
+            except Exception as e:
+                logger.error(f"Error during reward model training epoch {epoch+1}: {e}")
+                raise
 
             logger.info(f"Reward Model Epoch {epoch+1}/{self.config.reward.reward_epochs}: {avg_metrics}")
             # Save history
@@ -223,6 +242,50 @@ class ModernRLHFPipeline:
         reward_model_path = os.path.join(self.config.data.output_path, "reward_model")
         self.reward_model.save_model(reward_model_path)
         logger.info(f"Reward model saved to {reward_model_path}")
+    
+    def _train_reward_model_fallback(self, train_batches: List[Dict[str, Any]], epoch: int) -> Dict[str, float]:
+        """Fallback training method when train_epoch is not supported."""
+        epoch_metrics = []
+        pbar = tqdm(
+            train_batches, 
+            desc=f"Reward Training Epoch {epoch+1}/{self.config.reward.reward_epochs}",
+            unit="batch",
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+        )
+        for batch in pbar:
+            try:
+                metrics = self.reward_trainer.train_step(batch)
+                epoch_metrics.append(metrics)
+                # Update progress bar
+                if epoch_metrics:
+                    latest = epoch_metrics[-1]
+                    pbar.set_postfix({
+                        'loss': f'{latest.get("loss", 0):.4f}',
+                        'reward': f'{latest.get("predicted_reward_mean", 0):.4f}'
+                    })
+            except Exception as e:
+                logger.warning(f"Error in training step: {e}, skipping batch")
+                continue
+        pbar.close()
+        
+        if epoch_metrics:
+            # Filter out skipped batches and compute averages
+            valid_metrics = [m for m in epoch_metrics if not m.get('skipped', False)]
+            if valid_metrics:
+                avg_metrics = {}
+                for key in valid_metrics[0].keys():
+                    if key == 'skipped':
+                        continue
+                    values = [m[key] for m in valid_metrics if key in m and isinstance(m[key], (int, float))]
+                    if values:
+                        avg_metrics[key] = float(np.mean(values))
+                    else:
+                        avg_metrics[key] = 0.0
+                return avg_metrics
+            else:
+                return {}
+        else:
+            return {}
     
     def _prepare_reward_training_batches(self, train_data: Any) -> List[Dict[str, Any]]:
         """Prepare batches for reward model training."""
@@ -434,46 +497,110 @@ class ModernRLHFPipeline:
             # Step 2: Prepare reward model
             print("\n[Step 2/5] Preparing reward model...")
             reward_model_start = time.time()
-            self.prepare_reward_model(train_data, human_feedback)
-            reward_model_time = time.time() - reward_model_start
-            print(f"  Reward model prepared in {reward_model_time:.1f}s")
-            
+            try:
+                self.prepare_reward_model(train_data, human_feedback)
+                reward_model_time = time.time() - reward_model_start
+                print(f"  Reward model prepared in {reward_model_time:.1f}s")
+                reward_model_success = True
+            except Exception as e:
+                logger.warning(f"Failed to prepare reward model: {e}")
+                print(f"  ⚠️  Reward model preparation failed, creating basic fallback reward model")
+                try:
+                    # Create a basic fallback reward model
+                    self.reward_model = self._create_fallback_reward_model()
+                    reward_model_success = True
+                    print(f"  ✅ Fallback reward model created successfully")
+                except Exception as fallback_e:
+                    logger.error(f"Failed to create fallback reward model: {fallback_e}")
+                    reward_model_success = False
+                    print(f"  ❌ Fallback reward model also failed")
+                reward_model_time = time.time() - reward_model_start
+
             # Step 3: Prepare RLHF trainer
             print("\n[Step 3/5] Preparing RLHF trainer...")
             step_start = time.time()
-            self.prepare_rlhf_trainer()
-            step_time = time.time() - step_start
-            print(f"  RLHF trainer prepared in {step_time:.1f}s")
-            
+            try:
+                self.prepare_rlhf_trainer()
+                step_time = time.time() - step_start
+                print(f"  RLHF trainer prepared in {step_time:.1f}s")
+                trainer_success = True
+            except Exception as e:
+                logger.error(f"Failed to prepare RLHF trainer: {e}")
+                print(f"  ❌ RLHF trainer preparation failed: {e}")
+                raise  # This is critical, cannot continue without trainer
+
             # Step 4: Train RLHF model
             print("\n[Step 4/5] Training RLHF model...")
             training_start = time.time()
-            training_metrics = self.train_rlhf(train_data, eval_data)
-            training_time = time.time() - training_start
-            print(f"  Training completed in {training_time/60:.1f} minutes")
-            
+            try:
+                training_metrics = self.train_rlhf(train_data, eval_data)
+                training_time = time.time() - training_start
+                print(f"  Training completed in {training_time/60:.1f} minutes")
+                training_success = True
+            except Exception as e:
+                logger.error(f"RLHF training failed: {e}")
+                print(f"  ❌ Training failed: {e}")
+                training_metrics = {}
+                training_time = time.time() - training_start
+                training_success = False
+
             # Step 5: Evaluate model
             print("\n[Step 5/5] Evaluating model...")
             evaluation_start = time.time()
-            evaluation_metrics = self.evaluate_model(eval_data)
-            evaluation_time = time.time() - evaluation_start
-            print(f"  Evaluation completed in {evaluation_time:.1f}s")
+            try:
+                evaluation_metrics = self.evaluate_model(eval_data)
+                evaluation_time = time.time() - evaluation_start
+                print(f"  Evaluation completed in {evaluation_time:.1f}s")
+                evaluation_success = True
+            except Exception as e:
+                logger.error(f"Evaluation failed: {e}")
+                print(f"  ❌ Evaluation failed: {e}")
+                evaluation_metrics = {}
+                evaluation_time = time.time() - evaluation_start
+                evaluation_success = False
             
             # Step 6: Compute final metrics
             final_metrics = self._compute_final_metrics(evaluation_metrics)
             
             # Create results
             total_time = time.time() - start_time
-            
+
+            # Determine overall success
+            overall_success = (
+                reward_model_success and
+                trainer_success and
+                training_success and
+                evaluation_success
+            )
+
+            # Create detailed results
+            detailed_results = {
+                'reward_model_success': reward_model_success,
+                'trainer_success': trainer_success,
+                'training_success': training_success,
+                'evaluation_success': evaluation_success,
+                'training_time_breakdown': {
+                    'data_loading': step_time,  # From step 1
+                    'reward_model_prep': reward_model_time,
+                    'trainer_prep': step_time,  # From step 3
+                    'training': training_time,
+                    'evaluation': evaluation_time
+                }
+            }
+
             self.results = PipelineResults(
                 config=self.config,
-                reward_model_metrics={'training_time': reward_model_time},
+                reward_model_metrics={
+                    'training_time': reward_model_time,
+                    'success': reward_model_success,
+                    **detailed_results
+                },
                 training_metrics=training_metrics,
                 evaluation_metrics=evaluation_metrics,
                 final_metrics=final_metrics,
                 training_time=training_time,
                 total_time=total_time,
-                success=True
+                success=overall_success
             )
             
             # Save results

@@ -50,10 +50,24 @@ def main():
     parser.add_argument('--config', type=str, default='research', choices=['research', 'production', 'fast'], help='Config type')
     parser.add_argument('--generate-feedback', action='store_true', help='Generate synthetic human feedback')
     parser.add_argument('--feedback-size', type=int, default=2000, help='Size of synthetic feedback dataset')
+    parser.add_argument('--diagnose', action='store_true', help='Run diagnostic checks before training')
     args = parser.parse_args()
-    
+
     print("Modern RLHF Framework - Quick Start")
     print("=" * 50)
+
+    # Run diagnostics if requested
+    if args.diagnose:
+        print("\n[Running Pre-Training Diagnostics...]")
+        # Use our quick diagnostic script instead of the complex one
+        from quick_diagnose import main as run_quick_diagnostics
+        try:
+            run_quick_diagnostics()
+            print("\n✅ Diagnostics completed. Check output above for any issues.")
+        except Exception as e:
+            print(f"\n❌ Diagnostics failed: {e}")
+            print("You can still try training, but check for common issues manually.")
+        print("\nContinuing with training...\n")
     
     # Create configuration
     if args.config == 'research':
@@ -69,19 +83,18 @@ def main():
     config.data.target_feedback_size = args.feedback_size
     
     # Adjust paths to use existing data
-    config.data.train_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-train.json"
-    config.data.eval_data_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus\conala-test.json"
+    # Use local datasets if available, otherwise fall back to CoNaLa
+    if os.path.exists("./datasets_for_training") and os.path.exists("./datasets_for_eval"):
+        config.data.train_data_path = "./datasets_for_training"
+        config.data.eval_data_path = "./datasets_for_eval"
+    else:
+        # Fall back to CoNaLa corpus
+        config.data.conala_local_path = "./conala-corpus"
+
     config.data.human_feedback_path = "./evaluation_results_server"
     config.data.output_path = "./modern_outputs"
     config.data.min_prompt_length = 0
     config.data.min_response_length = 0
-    # Force local CoNaLa corpus (preferred over Hub)
-    #config.data.conala_local_path = r"C:\Users\Полина\Desktop\Работа\huawei\rlhf\conala-corpus"
-
-    config.data.train_data_path = "./datasets_for_training"
-    config.data.eval_data_path = "./datasets_for_eval"
-    config.data.human_feedback_path = "./evaluation_results_server"
-    config.data.output_path = "./modern_outputs"
     
     # Set experiment name
     config.experiment_name = "modern_rlhf_experiment"
@@ -106,12 +119,13 @@ def main():
     config.evaluation.eval_batch_size = 4
     config.evaluation.use_cached_embeddings = False
     
-    # Set target metrics (realistic values for CoNaLa)
-    config.evaluation.target_bertscore = 0.50
-    config.evaluation.target_codebleu = 0.35
-    config.evaluation.target_bleu = 0.25
-    config.evaluation.target_rouge = 0.35
-    config.evaluation.target_ruby = 0.20
+    # Set target metrics (realistic values for CoNaLa code generation)
+    # These are achievable targets based on SOTA results for code generation
+    config.evaluation.target_bertscore = 0.75  # Good semantic similarity for code
+    config.evaluation.target_codebleu = 0.45   # Decent code structure matching
+    config.evaluation.target_bleu = 0.35       # Reasonable token overlap for code
+    config.evaluation.target_rouge = 0.40      # Good semantic overlap
+    config.evaluation.target_ruby = 0.25       # Basic code quality
     
     # Reward model training
     config.reward.reward_epochs = 3

@@ -119,6 +119,12 @@ class RewardConfig:
     reward_normalization: bool = True
     reward_clipping: bool = True
     reward_clip_value: float = 5.0
+    reward_clip_min: float = -10.0  # Minimum value for reward clamping
+    reward_clip_max: float = 10.0   # Maximum value for reward clamping
+    
+    # Numerical stability
+    reward_normalization_epsilon: float = 1e-6  # Epsilon for normalization stability
+    freeze_base_model: bool = True  # Whether to freeze base model (only train reward heads)
 
 
 @dataclass
@@ -126,12 +132,12 @@ class EvaluationConfig:
     """Configuration for evaluation metrics."""
     
     # Target metrics (realistic thresholds for CoNaLa code generation)
-    # These are achievable targets based on SOTA results
-    target_bertscore: float = 0.50  # Realistic for code similarity
-    target_codebleu: float = 0.35   # Good code structure match
-    target_bleu: float = 0.25       # Reasonable token overlap
-    target_rouge: float = 0.35      # Good semantic overlap
-    target_ruby: float = 0.20       # Basic code quality  # Custom metric for code quality
+    # These are achievable targets based on SOTA results for code generation
+    target_bertscore: float = 0.75  # Good semantic similarity for code
+    target_codebleu: float = 0.45   # Decent code structure matching
+    target_bleu: float = 0.35       # Reasonable token overlap for code
+    target_rouge: float = 0.40      # Good semantic overlap
+    target_ruby: float = 0.25       # Basic code quality
     
     # Evaluation settings
     eval_batch_size: int = 8

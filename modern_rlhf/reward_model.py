@@ -279,8 +279,8 @@ class ModernRewardModel(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         try:
             self.tokenizer.padding_side = 'left'
-        except Exception:
-            pass
+        except (AttributeError, ValueError) as e:
+            logger.debug(f"Could not set padding_side: {e}")
         
         # Add padding token if not present
         if self.tokenizer.pad_token is None:
@@ -341,12 +341,32 @@ class ModernRewardModel(nn.Module):
                     if module.bias is not None:
                         nn.init.zeros_(module.bias)
     
+    def _ensure_device(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Ensure tensor is on the correct device.
+        
+        Args:
+            tensor: Input tensor
+            
+        Returns:
+            Tensor on the correct device
+        """
+        if tensor.device != self.device:
+            return tensor.to(self.device)
+        return tensor
+    
     def forward(self, prompts: List[str], responses: List[str]) -> Dict[str, torch.Tensor]:
         """Forward pass through the reward model with numerical stability."""
+        # Validate inputs
+        if not prompts or not responses:
+            raise ValueError("prompts and responses cannot be empty")
+        if len(prompts) != len(responses):
+            raise ValueError(f"prompts ({len(prompts)}) and responses ({len(responses)}) must have the same length")
+        
         # Tokenize inputs
         inputs = self._tokenize_pairs(prompts, responses)
         
         # Get base model outputs
+        # NOTE: base_model is frozen (no_grad) - only reward heads are trainable
         with torch.no_grad():
             outputs = self.base_model(**inputs)
         
@@ -354,8 +374,13 @@ class ModernRewardModel(nn.Module):
         pooled_output = outputs.last_hidden_state.mean(dim=1)
         
         # Normalize pooled output for numerical stability (prevent extreme values)
-        # Use simple normalization to avoid gradient issues
-        pooled_output = (pooled_output - pooled_output.mean(dim=-1, keepdim=True)) / (pooled_output.std(dim=-1, keepdim=True) + 1e-8)
+        # CRITICAL: Normalization must be outside no_grad to preserve gradients for reward heads
+        # Normalize across batch dimension to preserve relative differences between samples
+        epsilon = getattr(self.config, 'reward_normalization_epsilon', 1e-6)
+        mean = pooled_output.mean(dim=0, keepdim=True)  # Mean across batch
+        std = pooled_output.std(dim=0, keepdim=True)    # Std across batch
+        std = torch.clamp(std, min=epsilon)  # More robust minimum to prevent extreme values
+        pooled_output = (pooled_output - mean) / std
         
         # Compute different reward components
         rewards = {}
@@ -367,8 +392,10 @@ class ModernRewardModel(nn.Module):
         
         # Apply numerical stability: clamp rewards to prevent extreme values
         # This prevents numerical instability during training
+        clip_min = getattr(self.config, 'reward_clip_min', -10.0)
+        clip_max = getattr(self.config, 'reward_clip_max', 10.0)
         for key in rewards:
-            rewards[key] = torch.clamp(rewards[key], -10.0, 10.0)
+            rewards[key] = torch.clamp(rewards[key], clip_min, clip_max)
         
         return rewards
     
@@ -459,16 +486,26 @@ class ModernRewardModel(nn.Module):
             # This is 10x faster and sufficient for reward model training
             total_rewards = neural_rewards['total'].squeeze()
             
-            # Apply normalization and clipping
-            if self.config.reward_normalization:
-                total_rewards = torch.sigmoid(total_rewards)
+            # Check for NaN/Inf before processing
+            if torch.isnan(total_rewards).any() or torch.isinf(total_rewards).any():
+                logger.warning("NaN/Inf detected in rewards, replacing with zeros")
+                total_rewards = torch.where(
+                    torch.isnan(total_rewards) | torch.isinf(total_rewards),
+                    torch.zeros_like(total_rewards),
+                    total_rewards
+                )
             
+            # Apply clipping first, then normalization
             if self.config.reward_clipping:
                 total_rewards = torch.clamp(
                     total_rewards,
                     -self.config.reward_clip_value,
                     self.config.reward_clip_value
                 )
+
+            # Apply normalization after clipping
+            if self.config.reward_normalization:
+                total_rewards = torch.sigmoid(total_rewards)
             
             return total_rewards.to(self.device)
         
@@ -485,11 +522,13 @@ class ModernRewardModel(nn.Module):
 
                 # Weighted combination: keep tensor operations to preserve gradients
                 combined_reward = neural_reward * 0.7 + float(component_reward.total_reward) * 0.3
+                
+                # Check for NaN/Inf before processing
+                if torch.isnan(combined_reward) or torch.isinf(combined_reward):
+                    logger.warning(f"NaN/Inf detected in combined_reward at index {i}, replacing with zero")
+                    combined_reward = torch.tensor(0.0, device=self.device, dtype=torch.float32)
 
-                # Apply normalization and clipping
-                if self.config.reward_normalization:
-                    combined_reward = torch.sigmoid(combined_reward)
-
+                # Apply clipping first, then normalization
                 if self.config.reward_clipping:
                     combined_reward = torch.clamp(
                         combined_reward,
@@ -497,10 +536,23 @@ class ModernRewardModel(nn.Module):
                         self.config.reward_clip_value
                     )
 
+                # Apply normalization after clipping
+                if self.config.reward_normalization:
+                    combined_reward = torch.sigmoid(combined_reward)
+
                 final_reward_tensors.append(combined_reward)
 
             if final_reward_tensors:
-                return torch.stack(final_reward_tensors).view(-1).to(self.device)
+                result = torch.stack(final_reward_tensors).view(-1).to(self.device)
+                # Final check for NaN/Inf in result
+                if torch.isnan(result).any() or torch.isinf(result).any():
+                    logger.warning("NaN/Inf detected in final rewards, replacing with zeros")
+                    result = torch.where(
+                        torch.isnan(result) | torch.isinf(result),
+                        torch.zeros_like(result),
+                        result
+                    )
+                return result
             else:
                 return torch.tensor([], dtype=torch.float32, device=self.device)
     
@@ -569,8 +621,27 @@ class RewardModelTrainer:
         """Single training step."""
         self.model.train()
         
+        # Validate batch
+        if not batch or 'prompts' not in batch or 'responses' not in batch:
+            logger.warning("Invalid batch format, skipping")
+            return {
+                'loss': float('inf'),
+                'predicted_reward_mean': 0.0,
+                'predicted_reward_std': 0.0,
+                'skipped': True
+            }
+        
         prompts = batch['prompts']
         responses = batch['responses']
+        
+        if not prompts or not responses or len(prompts) != len(responses):
+            logger.warning(f"Invalid batch: prompts={len(prompts) if prompts else 0}, responses={len(responses) if responses else 0}")
+            return {
+                'loss': float('inf'),
+                'predicted_reward_mean': 0.0,
+                'predicted_reward_std': 0.0,
+                'skipped': True
+            }
         # Support new structured human feedback field (`human_feedback`) or legacy `human_ratings`
         human_feedback = batch.get('human_feedback', None)
         human_ratings = None
@@ -578,7 +649,8 @@ class RewardModelTrainer:
             # extract numeric ratings if present
             try:
                 human_ratings = [None if hf is None else (hf.get('rating') if isinstance(hf, dict) else hf) for hf in human_feedback]
-            except Exception:
+            except (AttributeError, TypeError, KeyError) as e:
+                logger.warning(f"Error extracting human ratings: {e}")
                 human_ratings = None
         else:
             human_ratings = batch.get('human_ratings', None)
@@ -598,7 +670,8 @@ class RewardModelTrainer:
                     use_human_targets = True
                 else:
                     use_human_targets = False
-            except Exception:
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error processing human ratings: {e}")
                 use_human_targets = False
 
         if use_human_targets:
@@ -636,8 +709,9 @@ class RewardModelTrainer:
         loss.backward()
         
         # Check gradients for numerical issues before clipping
-        grad_norm = 0.0
         has_nan_grad = False
+        grad_norm_squared = 0.0
+        
         for name, param in self.model.named_parameters():
             if param.grad is not None:
                 if torch.isnan(param.grad).any():
@@ -648,7 +722,8 @@ class RewardModelTrainer:
                     logger.warning(f"Inf gradients detected in {name}. Skipping gradient update.")
                     has_nan_grad = True
                     break
-                grad_norm += param.grad.data.norm(2).item() ** 2
+                # Only accumulate grad_norm if no NaN/Inf found
+                grad_norm_squared += param.grad.data.norm(2).item() ** 2
         
         if has_nan_grad:
             self.optimizer.zero_grad()  # Clear gradients
@@ -659,8 +734,8 @@ class RewardModelTrainer:
                 'skipped': True
             }
         
-        # Apply gradient clipping with numerical stability
-        grad_norm = grad_norm ** 0.5
+        # Apply gradient clipping with numerical stability (only if no NaN/Inf)
+        grad_norm = grad_norm_squared ** 0.5
         if grad_norm > 0:
             max_norm = self.config.reward_clip_value if hasattr(self.config, 'reward_clip_value') else 1.0
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm)
@@ -706,10 +781,22 @@ class RewardModelTrainer:
         
         pbar.close()
         
-        # Average metrics
+        # Average metrics (skip 'skipped' key and handle non-numeric values)
         if not epoch_metrics:
             return {'loss': 0.0, 'predicted_reward_mean': 0.0, 'predicted_reward_std': 0.0}
         avg_metrics = {}
+        skipped_count = sum(1 for m in epoch_metrics if m.get('skipped', False))
+        if skipped_count > 0:
+            logger.warning(f"Skipped {skipped_count}/{len(epoch_metrics)} batches due to numerical issues")
+        
         for key in epoch_metrics[0].keys():
-            avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
+            if key == 'skipped':
+                continue
+            # Only average numeric values
+            values = [m[key] for m in epoch_metrics if key in m and isinstance(m[key], (int, float)) and not np.isnan(m[key]) and not np.isinf(m[key])]
+            if values:
+                avg_metrics[key] = float(np.mean(values))
+            else:
+                avg_metrics[key] = 0.0
+        
         return avg_metrics

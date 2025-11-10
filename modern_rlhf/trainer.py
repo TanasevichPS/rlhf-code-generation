@@ -150,7 +150,8 @@ class PPOTrainer:
                 device_map=None,  # Отключить автоматическое распределение
                 low_cpu_mem_usage=False  # Отключить оптимизации памяти, которые вызывают предупреждения
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.debug(f"Failed to load CausalLM model: {e}, trying Seq2SeqLM")
             try:
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     model_name,
@@ -159,7 +160,8 @@ class PPOTrainer:
                     device_map=None,
                     low_cpu_mem_usage=False
                 )
-            except Exception:
+            except (OSError, ValueError, RuntimeError) as e2:
+                logger.debug(f"Failed to load Seq2SeqLM model: {e2}, falling back to base AutoModel")
                 # Fallback to base AutoModel (may not provide logits/generate)
                 model = AutoModel.from_pretrained(
                     model_name,
@@ -248,15 +250,16 @@ class PPOTrainer:
                 # Last resort: try to use token at index 0 (but this is risky)
                 try:
                     tokenizer.pad_token_id = 0
-                except Exception:
-                    logger.error("Failed to set pad_token_id - generation will likely fail")
+                except (AttributeError, ValueError, TypeError) as e:
+                    logger.error(f"Failed to set pad_token_id: {e} - generation will likely fail")
         
         # Verify pad_token_id is valid
         vocab_size = getattr(tokenizer, 'vocab_size', None)
         if vocab_size is None:
             try:
                 vocab_size = len(tokenizer.get_vocab())
-            except Exception:
+            except (AttributeError, TypeError) as e:
+                logger.debug(f"Could not get vocab size from get_vocab(): {e}")
                 vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else 50257  # GPT-2 default
         if tokenizer.pad_token_id is not None:
             if tokenizer.pad_token_id < 0 or tokenizer.pad_token_id >= vocab_size:
@@ -267,10 +270,23 @@ class PPOTrainer:
         # Ensure left padding for decoder-only models to avoid generation issues
         try:
             tokenizer.padding_side = 'left'
-        except Exception:
-            pass
+        except (AttributeError, ValueError) as e:
+            logger.debug(f"Could not set padding_side: {e}")
         
         return tokenizer
+    
+    def _ensure_device(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Ensure tensor is on the correct device.
+        
+        Args:
+            tensor: Input tensor
+            
+        Returns:
+            Tensor on the correct device
+        """
+        if tensor.device != self.device:
+            return tensor.to(self.device)
+        return tensor
     
     def _sync_tokenizer_with_model(self):
         """Synchronize tokenizer pad_token_id with model vocab size to prevent CUDA errors."""
@@ -286,7 +302,8 @@ class PPOTrainer:
                 emb = self.policy_model.get_input_embeddings()
                 if hasattr(emb, 'num_embeddings'):
                     model_vocab_size = emb.num_embeddings
-            except Exception:
+            except (AttributeError, RuntimeError) as e:
+                logger.debug(f"Could not get vocab size from embeddings: {e}")
                 pass
         
         if model_vocab_size is None:
@@ -561,185 +578,52 @@ class PPOTrainer:
         return entropy.mean(dim=1)
     
     def ppo_step(self, batch: Dict[str, Any]) -> TrainingStep:
-        """Single PPO training step."""
+        """Single PPO training step with simplified implementation."""
         self.policy_model.train()
-        
+
         prompts = batch['prompts']
-        
-        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Генерировать новые ответы на каждом шаге!
-        # В PPO мы должны генерировать ответы текущей политикой, а не использовать старые из датасета
+
+        # Generate new responses for PPO training
         generation_output = self.generate_responses(prompts)
         responses = generation_output['response_texts']
-        
-        # Вычислить старые log probabilities с reference model для сравнения
-        with torch.no_grad():
-            old_inputs = self.tokenizer(
-                responses,
-                padding=True,
-                truncation=True,
-                max_length=self.config.generation.max_response_length,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            old_outputs = self.reference_model(**old_inputs)
-            if hasattr(old_outputs, 'logits') and old_outputs.logits is not None:
-                old_logits = old_outputs.logits
-            elif hasattr(self.reference_model, 'lm_head') and hasattr(old_outputs, 'last_hidden_state'):
-                old_logits = self.reference_model.lm_head(old_outputs.last_hidden_state)
-            else:
-                emb = self.reference_model.get_output_embeddings() if hasattr(self.reference_model, 'get_output_embeddings') else None
-                if emb is not None and hasattr(old_outputs, 'last_hidden_state'):
-                    old_logits = torch.matmul(old_outputs.last_hidden_state, emb.weight.t())
-                else:
-                    # Fallback: use policy model for old log probs if reference model doesn't work
-                    old_logits = old_outputs.last_hidden_state.mean(dim=1, keepdim=True) if hasattr(old_outputs, 'last_hidden_state') else None
-                    if old_logits is None:
-                        old_log_probs = None
-                    else:
-                        old_log_probs = F.log_softmax(old_logits, dim=-1)
-            
-            if old_logits is not None:
-                # Правильное вычисление log probabilities для последовательности токенов
-                old_log_probs_tensor = F.log_softmax(old_logits, dim=-1)
-                response_mask = old_inputs['attention_mask']
-                
-                # Извлечь log probs для каждого токена ответа
-                old_log_probs = []
-                for i in range(len(responses)):
-                    response_tokens = old_inputs['input_ids'][i]
-                    mask = response_mask[i]
-                    
-                    # Получить log prob для каждого токена
-                    token_log_probs = []
-                    for j in range(len(response_tokens)):
-                        if mask[j] > 0:  # Только не-padding токены
-                            token_id = response_tokens[j].item()
-                            if token_id < old_log_probs_tensor.shape[-1]:
-                                token_log_probs.append(old_log_probs_tensor[i, j, token_id])
-                    
-                    if token_log_probs:
-                        old_log_probs.append(torch.stack(token_log_probs).sum())
-                    else:
-                        old_log_probs.append(torch.tensor(0.0, device=self.device))
-                
-                old_log_probs = torch.stack(old_log_probs) if old_log_probs else None
-            else:
-                old_log_probs = None
-        
+
         # Compute rewards
         rewards = self.compute_rewards(prompts, responses)
-        
-        # Compute KL divergence
-        kl_div = self.compute_kl_divergence(prompts, responses)
-        
-        # Compute entropy
-        entropy = self.compute_entropy(prompts, responses)
-        
-        # Compute advantages (simplified)
-        # Убедиться что rewards - это тензор на правильном устройстве
+
+        # Ensure rewards are on correct device
         if not isinstance(rewards, torch.Tensor):
             rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
-        advantages = rewards - rewards.mean()
-        
-        # Убедиться что advantages на правильном устройстве
-        if advantages.device != self.device:
-            advantages = advantages.to(self.device)
-        
-        # Compute policy loss
-        if old_log_probs is not None and len(old_log_probs) == len(prompts):
-            # Compute new log probabilities
-            inputs = self.tokenizer(
-                responses,
-                padding=True,
-                truncation=True,
-                max_length=self.config.generation.max_response_length,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            outputs = self.policy_model(**inputs)
-            # Robustly extract logits from outputs
-            if hasattr(outputs, 'logits') and outputs.logits is not None:
-                logits_for_new = outputs.logits
-            elif hasattr(self.policy_model, 'lm_head') and hasattr(outputs, 'last_hidden_state'):
-                logits_for_new = self.policy_model.lm_head(outputs.last_hidden_state)
-            else:
-                emb = self.policy_model.get_output_embeddings() if hasattr(self.policy_model, 'get_output_embeddings') else None
-                if emb is not None and hasattr(outputs, 'last_hidden_state'):
-                    logits_for_new = torch.matmul(outputs.last_hidden_state, emb.weight.t())
-                else:
-                    raise AttributeError("Unable to extract logits for new_log_probs")
+        elif rewards.device != self.device:
+            rewards = rewards.to(self.device)
 
-            new_log_probs_tensor = F.log_softmax(logits_for_new, dim=-1)
-            # Правильное вычисление log probabilities для последовательности токенов
-            response_mask = inputs['attention_mask']
-            
-            new_log_probs = []
-            for i in range(len(responses)):
-                response_tokens = inputs['input_ids'][i]
-                mask = response_mask[i]
-                
-                # Получить log prob для каждого токена
-                token_log_probs = []
-                for j in range(len(response_tokens)):
-                    if mask[j] > 0:  # Только не-padding токены
-                        token_id = response_tokens[j].item()
-                        if token_id < new_log_probs_tensor.shape[-1]:
-                            token_log_probs.append(new_log_probs_tensor[i, j, token_id])
-                
-                if token_log_probs:
-                    new_log_probs.append(torch.stack(token_log_probs).sum())
-                else:
-                    new_log_probs.append(torch.tensor(0.0, device=self.device))
-            
-            new_log_probs = torch.stack(new_log_probs) if new_log_probs else None
-            
-            # Compute ratio - проверка что оба тензора не None
-            if new_log_probs is not None and old_log_probs is not None:
-                ratio = torch.exp(new_log_probs - old_log_probs)
-            else:
-                # Fallback: используем упрощенную версию
-                ratio = torch.ones(len(prompts), device=self.device)
-            
-            # Compute clipped loss
-            clipped_ratio = torch.clamp(
-                ratio,
-                1 - self.config.training.ppo_clip_ratio,
-                1 + self.config.training.ppo_clip_ratio
-            )
-            
-            policy_loss = -torch.min(
-                ratio * advantages,
-                clipped_ratio * advantages
-            ).mean()
-        else:
-            # Simplified policy loss if old_log_probs not available
-            policy_loss = -rewards.mean()
-        
-        # Убедиться что policy_loss - скаляр на правильном устройстве
-        if isinstance(policy_loss, torch.Tensor) and policy_loss.device != self.device:
-            policy_loss = policy_loss.to(self.device)
-        
-        # Compute value loss (simplified)
-        value_loss = F.mse_loss(rewards, rewards.mean().expand_as(rewards))
-        
-        # Compute entropy loss
+        # Compute simplified advantages (can be improved with value function later)
+        advantages = rewards - rewards.mean()
+
+        # Simplified policy loss: maximize rewards with basic regularization
+        policy_loss = -rewards.mean()
+
+        # Add entropy regularization to encourage exploration
+        entropy = self.compute_entropy(prompts, responses)
         entropy_loss = -entropy.mean()
-        
+
+        # Add KL regularization to prevent policy from drifting too far
+        kl_div = self.compute_kl_divergence(prompts, responses)
+        kl_loss = kl_div.mean()
+
         # Total loss
         total_loss = (
             policy_loss +
-            self.config.training.ppo_value_loss_coef * value_loss +
             self.config.training.ppo_entropy_coef * entropy_loss +
-            self.config.training.ppo_kl_penalty * kl_div.mean()
+            self.config.training.ppo_kl_penalty * kl_loss
         )
-        
+
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), self.config.training.max_grad_norm)
         self.optimizer.step()
         self.scheduler.step()
-        
+
         # Create training step
         step = TrainingStep(
             step=self.step,
@@ -750,12 +634,11 @@ class PPOTrainer:
             learning_rate=self.optimizer.param_groups[0]['lr'],
             metrics={
                 'policy_loss': policy_loss.item(),
-                'value_loss': value_loss.item(),
                 'entropy_loss': entropy_loss.item(),
-                'kl_penalty': kl_div.mean().item()
+                'kl_loss': kl_loss.item()
             }
         )
-        
+
         self.step += 1
         return step
     
@@ -896,6 +779,13 @@ class PPOTrainer:
             
             pbar.close()
         
+        # If references exist but lengths mismatch, align to the minimum length and warn
+        if all_references and len(all_references) != len(all_responses):
+            logger.warning(f"Mismatch between number of references ({len(all_references)}) and responses ({len(all_responses)}). Trimming to min length.")
+            n = min(len(all_references), len(all_responses))
+            all_references = all_references[:n]
+            all_responses = all_responses[:n]
+        
         # Compute evaluation metrics
         eval_metrics = {}
         if all_rewards:
@@ -905,22 +795,7 @@ class PPOTrainer:
             eval_metrics['avg_reward'] = 0.0
             eval_metrics['reward_std'] = 0.0
         
-        # If references exist but lengths mismatch, align to the minimum length and warn
-        if all_references and len(all_references) != len(all_responses):
-            logger.warning(f"Mismatch between number of references ({len(all_references)}) and responses ({len(all_responses)}). Trimming to min length.")
-            n = min(len(all_references), len(all_responses))
-            all_references = all_references[:n]
-            all_responses = all_responses[:n]
-
-        if all_references and len(all_references) == len(all_responses):
-            metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
-
-        # Compute evaluation metrics
-        eval_metrics = {}
-        eval_metrics['avg_reward'] = np.mean(all_rewards)
-        eval_metrics['reward_std'] = np.std(all_rewards)
-        
-        # Compute other metrics if references are available
+        # Compute other metrics if references are available (only once)
         if all_references and len(all_references) == len(all_responses):
             metrics_results = self.metrics_evaluator.compute_all_metrics(all_responses, all_references)
             for metric_name, result in metrics_results.items():
