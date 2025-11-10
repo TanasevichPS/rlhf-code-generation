@@ -326,15 +326,23 @@ class ModernRewardModel(nn.Module):
             raise RuntimeError(f"RewardModel is not on GPU! Current device: {next(self.parameters()).device}")
     
     def _init_weights(self):
-        """Initialize model weights."""
-        for module in self.modules():
+        """Initialize model weights with numerical stability considerations."""
+        for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
+                # Use more conservative initialization for reward heads
+                if 'reward_head' in name or 'head' in name:
+                    # Smaller initialization for reward heads to prevent extreme values
+                    nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
+                else:
+                    # Standard initialization for other layers
+                    nn.init.xavier_uniform_(module.weight)
+                    if module.bias is not None:
+                        nn.init.zeros_(module.bias)
     
     def forward(self, prompts: List[str], responses: List[str]) -> Dict[str, torch.Tensor]:
-        """Forward pass through the reward model."""
+        """Forward pass through the reward model with numerical stability."""
         # Tokenize inputs
         inputs = self._tokenize_pairs(prompts, responses)
         
@@ -345,6 +353,10 @@ class ModernRewardModel(nn.Module):
         # Get pooled representation
         pooled_output = outputs.last_hidden_state.mean(dim=1)
         
+        # Normalize pooled output for numerical stability (prevent extreme values)
+        # Use simple normalization to avoid gradient issues
+        pooled_output = (pooled_output - pooled_output.mean(dim=-1, keepdim=True)) / (pooled_output.std(dim=-1, keepdim=True) + 1e-8)
+        
         # Compute different reward components
         rewards = {}
         rewards['total'] = self.reward_head(pooled_output)
@@ -352,6 +364,11 @@ class ModernRewardModel(nn.Module):
         rewards['execution'] = self.execution_head(pooled_output)
         rewards['semantic'] = self.semantic_head(pooled_output)
         rewards['quality'] = self.quality_head(pooled_output)
+        
+        # Apply numerical stability: clamp rewards to prevent extreme values
+        # This prevents numerical instability during training
+        for key in rewards:
+            rewards[key] = torch.clamp(rewards[key], -10.0, 10.0)
         
         return rewards
     
@@ -593,16 +610,68 @@ class RewardModelTrainer:
             target_rewards = torch.tensor(target_list, dtype=torch.float32, device=self.model.device)
             loss = F.mse_loss(predicted_rewards, target_rewards)
         
+        # Numerical stability checks
+        # Check for NaN or Inf in loss
+        if torch.isnan(loss) or torch.isinf(loss):
+            logger.warning("Numerical instability detected: loss is NaN or Inf. Skipping this batch.")
+            return {
+                'loss': float('inf'),
+                'predicted_reward_mean': 0.0,
+                'predicted_reward_std': 0.0,
+                'skipped': True
+            }
+        
+        # Check for NaN or Inf in predicted rewards
+        if torch.isnan(predicted_rewards).any() or torch.isinf(predicted_rewards).any():
+            logger.warning("Numerical instability detected: predicted_rewards contain NaN or Inf. Skipping this batch.")
+            return {
+                'loss': float('inf'),
+                'predicted_reward_mean': 0.0,
+                'predicted_reward_std': 0.0,
+                'skipped': True
+            }
+        
         # Backward pass
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        
+        # Check gradients for numerical issues before clipping
+        grad_norm = 0.0
+        has_nan_grad = False
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                if torch.isnan(param.grad).any():
+                    logger.warning(f"NaN gradients detected in {name}. Skipping gradient update.")
+                    has_nan_grad = True
+                    break
+                if torch.isinf(param.grad).any():
+                    logger.warning(f"Inf gradients detected in {name}. Skipping gradient update.")
+                    has_nan_grad = True
+                    break
+                grad_norm += param.grad.data.norm(2).item() ** 2
+        
+        if has_nan_grad:
+            self.optimizer.zero_grad()  # Clear gradients
+            return {
+                'loss': loss.item(),
+                'predicted_reward_mean': predicted_rewards.mean().item(),
+                'predicted_reward_std': predicted_rewards.std().item(),
+                'skipped': True
+            }
+        
+        # Apply gradient clipping with numerical stability
+        grad_norm = grad_norm ** 0.5
+        if grad_norm > 0:
+            max_norm = self.config.reward_clip_value if hasattr(self.config, 'reward_clip_value') else 1.0
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm)
+        
         self.optimizer.step()
         
         return {
             'loss': loss.item(),
             'predicted_reward_mean': predicted_rewards.mean().item(),
-            'predicted_reward_std': predicted_rewards.std().item()
+            'predicted_reward_std': predicted_rewards.std().item(),
+            'grad_norm': grad_norm
         }
     
     def train_epoch(self, dataloader) -> Dict[str, float]:
