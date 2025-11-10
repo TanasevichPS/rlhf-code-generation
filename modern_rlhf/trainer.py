@@ -38,6 +38,7 @@ from collections import defaultdict
 from .config import ModernRLHFConfig, TrainingConfig
 from .reward_model import ModernRewardModel
 from .metrics import ModernMetricsEvaluator
+from .metrics_tracker import MetricsTracker, EpochMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,10 @@ class PPOTrainer:
         
         # Metrics evaluator
         self.metrics_evaluator = ModernMetricsEvaluator()
+        
+        # Metrics tracker for detailed monitoring
+        self.metrics_tracker = MetricsTracker(output_dir=config.data.output_path + "/metrics")
+        self.metrics_tracker.set_total_epochs(config.training.ppo_epochs)
         
         # Training state
         self.step = 0
@@ -745,6 +750,7 @@ class PPOTrainer:
     
     def train_epoch(self, dataloader) -> Dict[str, float]:
         """Train for one epoch."""
+        epoch_start_time = time.time()  # Track epoch duration
         epoch_metrics = defaultdict(list)
         
         # Create progress bar with detailed info
@@ -796,6 +802,7 @@ class PPOTrainer:
         avg_metrics = {}
         for key, values in epoch_metrics.items():
             avg_metrics[key] = np.mean(values)
+        
         # Record history for plotting/inspection
         try:
             # Ensure training_history exists and append epoch metrics
@@ -804,6 +811,24 @@ class PPOTrainer:
             self.training_history.append(avg_metrics)
         except Exception:
             pass
+        
+        # Log to metrics tracker
+        epoch_time = time.time() - epoch_start_time
+        samples_per_second = total_batches * self.config.training.batch_size / epoch_time if epoch_time > 0 else 0
+        
+        metrics_obj = EpochMetrics(
+            epoch=self.epoch + 1,
+            timestamp=time.time(),
+            loss=avg_metrics['loss'],
+            reward=avg_metrics['reward'],
+            kl_divergence=avg_metrics['kl_divergence'],
+            entropy=avg_metrics['entropy'],
+            learning_rate=avg_metrics['learning_rate'],
+            epoch_time=epoch_time,
+            samples_per_second=samples_per_second
+        )
+        
+        self.metrics_tracker.log_epoch(metrics_obj)
 
         self.epoch += 1
         return avg_metrics
@@ -1218,6 +1243,22 @@ class ModernRLHFTrainer:
                 # Store in trainer's evaluation history
                 if hasattr(self.trainer, 'evaluation_history'):
                     self.trainer.evaluation_history.append(epoch_eval_metrics)
+                
+                # Update metrics tracker with evaluation metrics
+                if hasattr(self.trainer, 'metrics_tracker') and len(self.trainer.metrics_tracker.history) > 0:
+                    # Update the last logged epoch with eval metrics
+                    last_epoch = self.trainer.metrics_tracker.history[-1]
+                    last_epoch.bertscore = eval_metrics.get('eval_bertscore')
+                    last_epoch.codebleu = eval_metrics.get('eval_codebleu')
+                    last_epoch.bleu = eval_metrics.get('eval_bleu')
+                    last_epoch.rouge = eval_metrics.get('eval_rouge')
+                    last_epoch.ruby = eval_metrics.get('eval_ruby')
+                    last_epoch.eval_loss = eval_metrics.get('eval_loss')
+                    
+                    # Re-save updated metrics
+                    self.trainer.metrics_tracker._save_to_csv(last_epoch)
+                    self.trainer.metrics_tracker._save_to_json()
+                    self.trainer.metrics_tracker._generate_plots()
                 
                 # Check for improvement
                 if eval_metrics.get('avg_reward', 0) > best_metrics.get('avg_reward', -float('inf')):
