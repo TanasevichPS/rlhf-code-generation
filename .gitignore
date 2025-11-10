@@ -1,92 +1,91 @@
-# Временные файлы и кеши
-*.pyc
-*.pyo
-*.pyd
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
 *.so
 .Python
-.env
-.venv
-env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.pyc
+
+# Virtual Environment
 venv/
 ENV/
-env.bak/
-venv.bak/
+env/
+.venv
 
-# IDE и редакторы
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
 
-# Логи и данные
+# Project specific
+modern_outputs/
+synthetic_data/
+evaluation_results_server/
 *.log
-*.sql
-*.sqlite
-*.db
+*.csv
+*.json
+!requirements.txt
 
-# Модели и датасеты (очень большие файлы)
+# Exclude large CoNaLa files (too big for GitHub)
+conala-corpus/conala-mined.jsonl
+conala-corpus/*.parquet
+conala-corpus/*.json
+
+# Models and checkpoints
+checkpoints/
+models/
 *.pt
 *.pth
 *.bin
 *.safetensors
-*.h5
-*.joblib
+
+# Data
 datasets/
-outputs/
-code_rlhf_outputs/
-evaluation_results_server/
-evaluation_results/
-datasets_for_eval/
-tests/
+data/
+!conala-corpus/
 
-# Кеши тестирования и покрытия
-.pytest_cache/
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
+# Logs
+wandb/
+logs/
+tensorboard/
+
+# Coverage
 htmlcov/
+.coverage
+.pytest_cache/
 
-# Документация
-docs/_build/
-_build/
+# Jupyter
+.ipynb_checkpoints/
 
-# Специфичные для проекта
-.qodo/
-start.txt
-all_code.txt
-*.zip
-pyproject.toml
+# Environment
+.env
+.env.local
 
-# Jupyter notebooks
-.ipynb_checkpoints
-
-# Операционные системы
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
+# Windows
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# Резервные копии
-*.bak
-*.backup
-
-# Локальные конфигурации
-local.yml
-local.yaml
-local.json
-config/local.*
-
-conala-corpus/conala-mined.jsonl
-conala-corpus/*.jsonl
-*.jsonlconala-corpus/conala-mined.jsonl
-conala-corpus/conala-mined.jsonl
-conala-corpus/conala-mined.jsonl
+# Temporary
+tmp/
+temp/
+*.tmp
