@@ -582,18 +582,39 @@ class RewardModelTrainer:
     
     def train_epoch(self, dataloader) -> Dict[str, float]:
         """Train for one epoch."""
+        from tqdm import tqdm
+        import sys
+        
         epoch_metrics = []
         
-        for batch in dataloader:
+        # Add progress bar for reward model training
+        pbar = tqdm(
+            dataloader,
+            desc="Training Reward Model",
+            unit="batch",
+            bar_format='{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+            file=sys.stdout,
+            dynamic_ncols=True,
+            leave=True,
+            ascii=True if sys.platform == 'win32' else False
+        )
+        
+        for batch in pbar:
             metrics = self.train_step(batch)
             epoch_metrics.append(metrics)
+            
+            # Update progress bar with current metrics
+            if metrics:
+                pbar.set_postfix({
+                    'loss': f"{metrics.get('loss', 0):.4f}",
+                    'reward': f"{metrics.get('predicted_reward_mean', 0):.3f}"
+                })
+        
+        pbar.close()
         
         # Average metrics
         if not epoch_metrics:
             return {'loss': 0.0, 'predicted_reward_mean': 0.0, 'predicted_reward_std': 0.0}
-        avg_metrics = {}
-        for key in epoch_metrics[0].keys():
-            avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
         avg_metrics = {}
         for key in epoch_metrics[0].keys():
             avg_metrics[key] = np.mean([m[key] for m in epoch_metrics])
