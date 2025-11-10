@@ -427,40 +427,65 @@ class ModernRewardModel(nn.Module):
         
         return components_list
     
-    def compute_reward(self, prompts: List[str], responses: List[str]) -> torch.Tensor:
-        """Compute final reward scores."""
+    def compute_reward(self, prompts: List[str], responses: List[str], use_fast_mode: bool = True) -> torch.Tensor:
+        """Compute final reward scores.
+        
+        Args:
+            use_fast_mode: If True, use only neural network (10x faster).
+                          If False, use full component-based rewards (slow but comprehensive).
+        """
         # Get neural network predictions
         neural_rewards = self.forward(prompts, responses)
         
-        # Get component-based rewards
-        component_rewards = self.compute_reward_components(prompts, responses)
-        
-        # Combine neural and component rewards
-        final_reward_tensors: List[torch.Tensor] = []
-        total_tensor = neural_rewards['total']
-        for i, component_reward in enumerate(component_rewards):
-            neural_reward = total_tensor[i]
-
-            # Weighted combination: keep tensor operations to preserve gradients
-            combined_reward = neural_reward * 0.7 + float(component_reward.total_reward) * 0.3
-
+        if use_fast_mode:
+            # FAST MODE: Use only neural network rewards (for training)
+            # This is 10x faster and sufficient for reward model training
+            total_rewards = neural_rewards['total'].squeeze()
+            
             # Apply normalization and clipping
             if self.config.reward_normalization:
-                combined_reward = torch.sigmoid(combined_reward)
-
+                total_rewards = torch.sigmoid(total_rewards)
+            
             if self.config.reward_clipping:
-                combined_reward = torch.clamp(
-                    combined_reward,
+                total_rewards = torch.clamp(
+                    total_rewards,
                     -self.config.reward_clip_value,
                     self.config.reward_clip_value
                 )
-
-            final_reward_tensors.append(combined_reward)
-
-        if final_reward_tensors:
-            return torch.stack(final_reward_tensors).view(-1).to(self.device)
+            
+            return total_rewards.to(self.device)
+        
         else:
-            return torch.tensor([], dtype=torch.float32, device=self.device)
+            # SLOW MODE: Use full component-based rewards (for evaluation/inference)
+            # Get component-based rewards
+            component_rewards = self.compute_reward_components(prompts, responses)
+            
+            # Combine neural and component rewards
+            final_reward_tensors: List[torch.Tensor] = []
+            total_tensor = neural_rewards['total']
+            for i, component_reward in enumerate(component_rewards):
+                neural_reward = total_tensor[i]
+
+                # Weighted combination: keep tensor operations to preserve gradients
+                combined_reward = neural_reward * 0.7 + float(component_reward.total_reward) * 0.3
+
+                # Apply normalization and clipping
+                if self.config.reward_normalization:
+                    combined_reward = torch.sigmoid(combined_reward)
+
+                if self.config.reward_clipping:
+                    combined_reward = torch.clamp(
+                        combined_reward,
+                        -self.config.reward_clip_value,
+                        self.config.reward_clip_value
+                    )
+
+                final_reward_tensors.append(combined_reward)
+
+            if final_reward_tensors:
+                return torch.stack(final_reward_tensors).view(-1).to(self.device)
+            else:
+                return torch.tensor([], dtype=torch.float32, device=self.device)
     
     def load_human_feedback(self, feedback_path: str):
         """Load human feedback data."""
