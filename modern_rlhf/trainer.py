@@ -22,6 +22,17 @@ import os
 import time
 from tqdm import tqdm
 import sys
+import warnings
+
+# Suppress excessive transformer warnings that interfere with progress bars
+warnings.filterwarnings('ignore', message='.*not sharded.*')
+warnings.filterwarnings('ignore', message='.*was not found in model.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='transformers')
+
+# Set transformers logging to only show errors
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+import transformers
+transformers.logging.set_verbosity_error()
 
 # Configure tqdm for better Windows console support
 if sys.platform == 'win32':
@@ -760,9 +771,11 @@ class PPOTrainer:
             total=total_batches,
             desc=f"Epoch {self.epoch+1}/{self.config.training.ppo_epochs}",
             unit="batch",
-            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
-            file=sys.stdout,  # Explicitly write to stdout
-            dynamic_ncols=True,  # Auto-adjust to terminal width
+            bar_format='{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+            file=sys.stdout,
+            dynamic_ncols=True,
+            leave=True,  # Keep progress bar after completion
+            position=0,  # Top-level progress bar
             **tqdm_kwargs
         )
         
@@ -851,9 +864,11 @@ class PPOTrainer:
                 eval_dataloader,
                 desc="Evaluating",
                 unit="batch",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
-                file=sys.stdout,  # Explicitly write to stdout
-                dynamic_ncols=True,  # Auto-adjust to terminal width
+                bar_format='{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                file=sys.stdout,
+                dynamic_ncols=True,
+                leave=True,
+                position=0,
                 **tqdm_kwargs
             )
             
