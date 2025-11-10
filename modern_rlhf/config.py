@@ -101,8 +101,8 @@ class RewardConfig:
     
     # Reward model training
     reward_learning_rate: float = 2e-5
-    reward_batch_size: int = 8
-    reward_epochs: int = 3
+    reward_batch_size: int = 32  # Increased from 8 for faster training
+    reward_epochs: int = 2       # Reduced from 3 (2 epochs is enough)
     
     # Human feedback integration
     human_feedback_weight: float = 0.3
