@@ -1,0 +1,129 @@
+{
+  "config": {
+    "policy_model_name": "mock-policy",
+    "reward_model_name": "mock-reward",
+    "method": "dpo",
+    "learning_rate": 1e-05,
+    "batch_size": 2,
+    "max_length": 512,
+    "num_epochs": 2,
+    "warmup_steps": 100,
+    "beta": 0.1,
+    "reference_free": false,
+    "ppo_epochs": 4,
+    "ppo_clip_ratio": 0.2,
+    "value_loss_coef": 0.1,
+    "entropy_coef": 0.01,
+    "use_human_feedback": true,
+    "human_feedback_dim": 64,
+    "human_feedback_weight": 0.3,
+    "train_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\25oct\\datasets_for_training",
+    "eval_data_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\25oct\\datasets_for_eval",
+    "human_feedback_path": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\25oct\\evaluation_results_server",
+    "output_dir": "C:\\Users\\\u041f\u043e\u043b\u0438\u043d\u0430\\Desktop\\\u0420\u0430\u0431\u043e\u0442\u0430\\huawei\\rlhf\\25oct\\rlhf_outputs_fast",
+    "eval_batch_size": 8,
+    "eval_samples": 20,
+    "target_bertscore": 0.7,
+    "target_codebleu": 0.6,
+    "target_bleu": 0.4,
+    "target_rouge": 0.5,
+    "device": "cpu",
+    "mixed_precision": false,
+    "gradient_checkpointing": true,
+    "save_steps": 100,
+    "eval_steps": 100,
+    "logging_steps": 10,
+    "seed": 42
+  },
+  "training_results": {
+    "training_stats": [
+      {
+        "loss": 0.7119133719983003,
+        "chosen_log_prob": -1.8811293330531274,
+        "rejected_log_prob": -2.8617762896760404,
+        "log_ratio": 0.9806469566229126
+      },
+      {
+        "loss": 0.7085707245701156,
+        "chosen_log_prob": -2.104852454427269,
+        "rejected_log_prob": -2.7114735857465293,
+        "log_ratio": 0.6066211313192607
+      }
+    ],
+    "epoch_metrics": [
+      {
+        "ruby": 0.982,
+        "bertscore": 0.36991640313370494,
+        "codebleu": 0.21904391477783558,
+        "bleu": 0.11143698634174576,
+        "rouge": 0.22646865768334704
+      },
+      {
+        "ruby": 0.982,
+        "bertscore": 0.3902568980944439,
+        "codebleu": 0.25819586359562546,
+        "bleu": 0.14317595786522955,
+        "rouge": 0.27149581272335
+      }
+    ],
+    "final_model": null
+  },
+  "evaluation_results": {
+    "metrics": {
+      "codebleu": 0.0,
+      "ruby": 0.99
+    },
+    "targets_met": {
+      "bertscore": false,
+      "codebleu": false,
+      "bleu": false,
+      "rouge": false
+    },
+    "summary": {
+      "metrics": {
+        "codebleu": 0.0,
+        "ruby": 0.99
+      },
+      "all_targets_met": false,
+      "targets_met_count": 0,
+      "targets_total": 4,
+      "targets_met": {
+        "bertscore": false,
+        "codebleu": false,
+        "bleu": false,
+        "rouge": false
+      }
+    },
+    "generated_responses": [
+      "def add(a, b):\n    return a + b",
+      "def multiply(a, b):\n    return a * b",
+      "def is_even(n):\n    return n % 2 == 0",
+      "def get_length(s):\n    return len(s)",
+      "def to_uppercase(s):\n    return s.upper()"
+    ],
+    "references": [
+      "def add(a, b):\n    return a + b",
+      "def multiply(a, b):\n    return a * b",
+      "def is_even(n):\n    return n % 2 == 0",
+      "def get_length(s):\n    return len(s)",
+      "def to_uppercase(s):\n    return s.upper()"
+    ]
+  },
+  "timestamp": "2025-11-12T11:34:01.736146",
+  "epoch_metrics": [
+    {
+      "ruby": 0.982,
+      "bertscore": 0.36991640313370494,
+      "codebleu": 0.21904391477783558,
+      "bleu": 0.11143698634174576,
+      "rouge": 0.22646865768334704
+    },
+    {
+      "ruby": 0.982,
+      "bertscore": 0.3902568980944439,
+      "codebleu": 0.25819586359562546,
+      "bleu": 0.14317595786522955,
+      "rouge": 0.27149581272335
+    }
+  ]
+}
