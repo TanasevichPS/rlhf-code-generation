@@ -1,32 +1,7 @@
-# Core Dependencies
-torch>=2.0.0
-transformers>=4.30.0
-datasets>=2.12.0
-
-# Training and RLHF
-trl>=0.4.0
-peft>=0.3.0
-accelerate>=0.20.0
-
-# Metrics
-bert-score>=0.3.13
-rouge-score>=0.1.2
-nltk>=3.8
-evaluate>=0.4.0
-
-# Data Processing
-pandas>=2.0.0
-numpy>=1.24.0
-
-# Utilities
-tqdm>=4.65.0
-loguru>=0.7.0
-
-# Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-
-# Optional (for better performance)
-# flash-attn>=2.0.0  # Requires specific CUDA setup
-# bitsandbytes>=0.40.0  # For 8-bit quantization
-
+torch>=1.9.0
+numpy>=1.21.0
+tqdm>=4.62.0
+transformers>=4.15.0
+scikit-learn>=1.0.0
+pandas>=1.3.0
+matplotlib>=3.5.0
